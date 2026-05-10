@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.egg-info/
+build/
+dist/
+.idea/
+.vscode/
+
+# Secrets — DO NOT COMMIT
+config.py
+
+# Local DB artifacts
+business_tracker.db
+business_tracker.db-*
+business_tracker.wal.db*
+replica.db
+replica.db-*

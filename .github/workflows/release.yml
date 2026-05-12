@@ -1,0 +1,83 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_name: BusinessTracker-mac.zip
+          - os: windows-latest
+            platform: windows
+            artifact_name: BusinessTracker-windows.zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Write Turso config from secrets
+        shell: bash
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: |
+          cat > config.py <<EOF
+          import os
+          TURSO_URL = os.environ.get("TURSO_URL", "${TURSO_URL}")
+          TURSO_TOKEN = os.environ.get("TURSO_TOKEN", "${TURSO_TOKEN}")
+          EOF
+
+      - name: Build (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          pyinstaller --noconfirm --windowed \
+            --name "BusinessTracker" \
+            --osx-bundle-identifier com.anchorpointja.businesstracker \
+            --collect-all customtkinter \
+            --collect-all tkcalendar \
+            --collect-all libsql_experimental \
+            main.py
+          cd dist
+          zip -r BusinessTracker-mac.zip BusinessTracker.app
+
+      - name: Build (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --windowed \
+            --name "BusinessTracker" \
+            --collect-all customtkinter \
+            --collect-all tkcalendar \
+            --collect-all libsql_experimental \
+            main.py
+          cd dist
+          7z a BusinessTracker-windows.zip BusinessTracker
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact_name }}
+          generate_release_notes: true

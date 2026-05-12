@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS income (
     source TEXT NOT NULL,
     amount REAL NOT NULL,
     currency TEXT NOT NULL DEFAULT 'USD',
+    fx_rate REAL,
     notes TEXT DEFAULT ''
 );
 
@@ -233,6 +234,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     category TEXT NOT NULL,
     amount REAL NOT NULL,
     currency TEXT NOT NULL DEFAULT 'USD',
+    fx_rate REAL,
     notes TEXT DEFAULT ''
 );
 
@@ -274,6 +276,12 @@ def init_db():
                 conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN created_by TEXT DEFAULT ''"
                 )
+            except Exception:
+                pass
+        # Migrate to add the locked-in fx_rate column on currency tables.
+        for table in ("income", "expenses"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN fx_rate REAL")
             except Exception:
                 pass
         # Snapshot FX rate at time of entry — historical conversions stay

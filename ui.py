@@ -480,16 +480,18 @@ class IncomeTab(ctk.CTkFrame):
 
         self.table = DataTable(
             self,
-            [("id", "ID", 50), ("date", "Date", 110), ("source", "Source", 170),
-             ("amount", "Amount", 100), ("currency", "Cur", 60),
-             ("converted", "In " + db.get_display_currency(), 120),
-             ("notes", "Notes", 200), ("created_by", "By", 100)],
+            [("id", "ID", 50), ("date", "Date", 110), ("source", "Source", 160),
+             ("amount", "Amount", 90), ("currency", "Cur", 55),
+             ("fx_rate", "Rate", 70),
+             ("converted", "In " + db.get_display_currency(), 115),
+             ("notes", "Notes", 180), ("created_by", "By", 90)],
             on_delete=self._delete,
             editable={
                 "date": {"type": "date"},
                 "source": {"type": "text"},
                 "amount": {"type": "number"},
                 "currency": {"type": "options", "options": db.CURRENCIES},
+                "fx_rate": {"type": "number"},
                 "notes": {"type": "text"},
             },
             on_edit=self._edit,
@@ -540,7 +542,7 @@ class IncomeTab(ctk.CTkFrame):
 
     def refresh(self):
         display = db.get_display_currency()
-        rate = db.get_fx_rate()
+        fallback = db.get_fx_rate()
         rows = db.list_income(self.business_id)
         self.table.tree.heading("converted", text="In " + display)
         self.table.set_rows(
@@ -548,7 +550,12 @@ class IncomeTab(ctk.CTkFrame):
                 (
                     r["id"], r["date"], r["source"],
                     f"{r['amount']:,.2f}", r["currency"],
-                    fmt_money(db.convert(r["amount"], r["currency"], display, rate), display),
+                    f"{(r['fx_rate'] or fallback):,.2f}",
+                    fmt_money(
+                        db.convert(r["amount"], r["currency"], display,
+                                   r["fx_rate"] or fallback),
+                        display,
+                    ),
                     r["notes"], r["created_by"] or "—",
                 )
                 for r in rows
@@ -597,16 +604,18 @@ class ExpenseTab(ctk.CTkFrame):
 
         self.table = DataTable(
             self,
-            [("id", "ID", 50), ("date", "Date", 110), ("category", "Category", 170),
-             ("amount", "Amount", 100), ("currency", "Cur", 60),
-             ("converted", "In " + db.get_display_currency(), 120),
-             ("notes", "Notes", 200), ("created_by", "By", 100)],
+            [("id", "ID", 50), ("date", "Date", 110), ("category", "Category", 160),
+             ("amount", "Amount", 90), ("currency", "Cur", 55),
+             ("fx_rate", "Rate", 70),
+             ("converted", "In " + db.get_display_currency(), 115),
+             ("notes", "Notes", 180), ("created_by", "By", 90)],
             on_delete=self._delete,
             editable={
                 "date": {"type": "date"},
                 "category": {"type": "text"},
                 "amount": {"type": "number"},
                 "currency": {"type": "options", "options": db.CURRENCIES},
+                "fx_rate": {"type": "number"},
                 "notes": {"type": "text"},
             },
             on_edit=self._edit,
@@ -657,7 +666,7 @@ class ExpenseTab(ctk.CTkFrame):
 
     def refresh(self):
         display = db.get_display_currency()
-        rate = db.get_fx_rate()
+        fallback = db.get_fx_rate()
         rows = db.list_expenses(self.business_id)
         self.table.tree.heading("converted", text="In " + display)
         self.table.set_rows(
@@ -665,7 +674,12 @@ class ExpenseTab(ctk.CTkFrame):
                 (
                     r["id"], r["date"], r["category"],
                     f"{r['amount']:,.2f}", r["currency"],
-                    fmt_money(db.convert(r["amount"], r["currency"], display, rate), display),
+                    f"{(r['fx_rate'] or fallback):,.2f}",
+                    fmt_money(
+                        db.convert(r["amount"], r["currency"], display,
+                                   r["fx_rate"] or fallback),
+                        display,
+                    ),
                     r["notes"], r["created_by"] or "—",
                 )
                 for r in rows
@@ -1002,7 +1016,7 @@ class TopBar(ctk.CTkFrame):
         self.rate_entry.insert(0, f"{db.get_fx_rate():.2f}")
         self.rate_entry.pack(side="right", padx=4)
 
-        ctk.CTkLabel(self, text="JMD per 1 USD:").pack(side="right", padx=(16, 4))
+        ctk.CTkLabel(self, text="Rate for new entries (JMD per 1 USD):").pack(side="right", padx=(16, 4))
 
         self.currency_var = ctk.StringVar(value=db.get_display_currency())
         ctk.CTkOptionMenu(
@@ -1173,17 +1187,22 @@ class App(ctk.CTk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def refresh_from_remote(self):
-        """Called on the Tk main thread after a successful background sync."""
+        """Called on the Tk main thread after a successful background sync.
+
+        We deliberately do NOT rebuild the detail pane here — doing so would
+        clobber whatever the user is typing in a form. Sidebar refresh is
+        cheap (no input fields). Detail data refreshes on the user's next
+        action (add/edit/select), which all go through the sync path.
+        """
         from datetime import datetime as _dt
         self.topbar.set_sync_status(f"Synced {_dt.now().strftime('%H:%M:%S')}")
-        # Refresh sidebar (new businesses might have been added remotely) and
-        # the active detail view (totals may have changed).
         self.sidebar.refresh()
-        self.detail.show(self.sidebar.selected_id)
 
 
 def run():
     db.init_db()
+
+    app = App()
 
     # Ensure we have an active profile before showing the main window.
     active = user_profile.get_active()
@@ -1194,23 +1213,23 @@ def run():
             db.add_profile(active)
         except Exception:
             pass
+        app.topbar.refresh_profile_badge()
     else:
-        # Modal profile picker on a tiny hidden root.
-        picker_root = ctk.CTk()
-        picker_root.withdraw()
+        # Show modal picker on top of the (visible) main window.
         chosen = {"name": None}
 
         def _on_pick(name):
             chosen["name"] = name
-            picker_root.quit()
 
-        ProfilePicker(picker_root, on_pick=_on_pick, allow_cancel=False)
-        picker_root.mainloop()
-        picker_root.destroy()
+        picker = ProfilePicker(app, on_pick=_on_pick, allow_cancel=False)
+        picker.update_idletasks()
+        picker.lift()
+        picker.focus_force()
+        app.wait_window(picker)
+
         if not chosen["name"]:
             return  # user closed somehow; abort
-
-    app = App()
+        app.topbar.refresh_profile_badge()
 
     # Periodic background sync — pulls remote changes every 10s. Callbacks
     # fire on the sync thread, so we hop back to the Tk main loop.

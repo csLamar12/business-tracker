@@ -276,6 +276,15 @@ def init_db():
                 )
             except Exception:
                 pass
+        # Snapshot FX rate at time of entry — historical conversions stay
+        # frozen at the rate that was active when the row was created.
+        for table in ("income", "expenses"):
+            try:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN fx_rate REAL"
+                )
+            except Exception:
+                pass
 
 
 # ---------- Profiles ----------
@@ -398,12 +407,14 @@ def update_phase(business_id, phase, notes):
 
 # ---------- Income ----------
 
-def add_income(business_id, date, source, amount, currency, notes, created_by=""):
+def add_income(business_id, date, source, amount, currency, notes, created_by="", fx_rate=None):
+    if fx_rate is None:
+        fx_rate = get_fx_rate()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO income (business_id, date, source, amount, currency, notes, created_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (business_id, date, source, amount, currency, notes, created_by or ""),
+            "INSERT INTO income (business_id, date, source, amount, currency, notes, created_by, fx_rate) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (business_id, date, source, amount, currency, notes, created_by or "", fx_rate),
         )
 
 
@@ -420,7 +431,7 @@ def delete_income(income_id):
         conn.execute("DELETE FROM income WHERE id = ?", (income_id,))
 
 
-_INCOME_FIELDS = {"date", "source", "amount", "currency", "notes"}
+_INCOME_FIELDS = {"date", "source", "amount", "currency", "notes", "fx_rate"}
 
 
 def update_income(income_id, field, value):
@@ -433,19 +444,24 @@ def update_income(income_id, field, value):
 def total_income(business_id, display_currency=None):
     if display_currency is None:
         display_currency = get_display_currency()
-    rate = get_fx_rate()
+    fallback = get_fx_rate()
     rows = list_income(business_id)
-    return sum(convert(r["amount"], r["currency"], display_currency, rate) for r in rows)
+    return sum(
+        convert(r["amount"], r["currency"], display_currency, r["fx_rate"] or fallback)
+        for r in rows
+    )
 
 
 # ---------- Expenses ----------
 
-def add_expense(business_id, date, category, amount, currency, notes, created_by=""):
+def add_expense(business_id, date, category, amount, currency, notes, created_by="", fx_rate=None):
+    if fx_rate is None:
+        fx_rate = get_fx_rate()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO expenses (business_id, date, category, amount, currency, notes, created_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (business_id, date, category, amount, currency, notes, created_by or ""),
+            "INSERT INTO expenses (business_id, date, category, amount, currency, notes, created_by, fx_rate) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (business_id, date, category, amount, currency, notes, created_by or "", fx_rate),
         )
 
 
@@ -462,7 +478,7 @@ def delete_expense(expense_id):
         conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
 
 
-_EXPENSE_FIELDS = {"date", "category", "amount", "currency", "notes"}
+_EXPENSE_FIELDS = {"date", "category", "amount", "currency", "notes", "fx_rate"}
 
 
 def update_expense(expense_id, field, value):
@@ -475,9 +491,12 @@ def update_expense(expense_id, field, value):
 def total_expenses(business_id, display_currency=None):
     if display_currency is None:
         display_currency = get_display_currency()
-    rate = get_fx_rate()
+    fallback = get_fx_rate()
     rows = list_expenses(business_id)
-    return sum(convert(r["amount"], r["currency"], display_currency, rate) for r in rows)
+    return sum(
+        convert(r["amount"], r["currency"], display_currency, r["fx_rate"] or fallback)
+        for r in rows
+    )
 
 
 def total_income_with_subs(business_id, display_currency=None):

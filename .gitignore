@@ -19,3 +19,5 @@ business_tracker.db-*
 business_tracker.wal.db*
 replica.db
 replica.db-*
+test_replica.db
+test_replica.db-*

@@ -2,7 +2,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-import libsql_experimental as libsql
+import libsql
 
 from config import TURSO_URL, TURSO_TOKEN
 

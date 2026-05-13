@@ -518,27 +518,32 @@ class IncomeTab(ctk.CTkFrame):
         if not source:
             messagebox.showwarning("Missing source", "Please enter a source.")
             return
-        db.add_income(
-            self.business_id,
-            self.date_entry.get_date().isoformat(),
-            source,
-            amount,
-            self.currency_var.get(),
-            self.notes_entry.get().strip(),
-            user_profile.get_active() or "",
-        )
+        # Snapshot form values, clear form, dispatch write off the UI thread.
+        bid = self.business_id
+        date_val = self.date_entry.get_date().isoformat()
+        currency = self.currency_var.get()
+        notes = self.notes_entry.get().strip()
+        profile_name = user_profile.get_active() or ""
         self.source_entry.delete(0, "end")
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
-        self.refresh()
+
+        db.submit_write(
+            lambda: db.add_income(bid, date_val, source, amount, currency, notes, profile_name),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _delete(self, row_id):
-        db.delete_income(row_id)
-        self.refresh()
+        db.submit_write(
+            lambda: db.delete_income(row_id),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _edit(self, row_id, field, value):
-        db.update_income(row_id, field, value)
-        self.refresh()
+        db.submit_write(
+            lambda: db.update_income(row_id, field, value),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def refresh(self):
         display = db.get_display_currency()
@@ -642,27 +647,31 @@ class ExpenseTab(ctk.CTkFrame):
         if not category:
             messagebox.showwarning("Missing category", "Please enter a category.")
             return
-        db.add_expense(
-            self.business_id,
-            self.date_entry.get_date().isoformat(),
-            category,
-            amount,
-            self.currency_var.get(),
-            self.notes_entry.get().strip(),
-            user_profile.get_active() or "",
-        )
+        bid = self.business_id
+        date_val = self.date_entry.get_date().isoformat()
+        currency = self.currency_var.get()
+        notes = self.notes_entry.get().strip()
+        profile_name = user_profile.get_active() or ""
         self.category_entry.delete(0, "end")
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
-        self.refresh()
+
+        db.submit_write(
+            lambda: db.add_expense(bid, date_val, category, amount, currency, notes, profile_name),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _delete(self, row_id):
-        db.delete_expense(row_id)
-        self.refresh()
+        db.submit_write(
+            lambda: db.delete_expense(row_id),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _edit(self, row_id, field, value):
-        db.update_expense(row_id, field, value)
-        self.refresh()
+        db.submit_write(
+            lambda: db.update_expense(row_id, field, value),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def refresh(self):
         display = db.get_display_currency()
@@ -747,26 +756,31 @@ class PlansTab(ctk.CTkFrame):
         if not title:
             messagebox.showwarning("Missing title", "Please enter a plan title.")
             return
-        db.add_plan(
-            self.business_id,
-            title,
-            self.desc_entry.get().strip(),
-            self.target_entry.get_date().isoformat(),
-            self.status_var.get(),
-            user_profile.get_active() or "",
-        )
+        bid = self.business_id
+        description = self.desc_entry.get().strip()
+        target_val = self.target_entry.get_date().isoformat()
+        status = self.status_var.get()
+        profile_name = user_profile.get_active() or ""
         self.title_entry.delete(0, "end")
         self.target_entry.set_date(date.today())
         self.desc_entry.delete(0, "end")
-        self.refresh()
+
+        db.submit_write(
+            lambda: db.add_plan(bid, title, description, target_val, status, profile_name),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _delete(self, row_id):
-        db.delete_plan(row_id)
-        self.refresh()
+        db.submit_write(
+            lambda: db.delete_plan(row_id),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def _edit(self, row_id, field, value):
-        db.update_plan(row_id, field, value)
-        self.refresh()
+        db.submit_write(
+            lambda: db.update_plan(row_id, field, value),
+            on_done=lambda: self.after(0, self.refresh),
+        )
 
     def refresh(self):
         rows = db.list_plans(self.business_id)
@@ -1250,7 +1264,32 @@ def run():
     db.start_background_sync(
         interval_seconds=10, on_synced=_on_synced, on_error=_on_error,
     )
+    # Drive a "Saving..." indicator from the writer-queue depth.
+    def _on_pending(count):
+        try:
+            if count > 0:
+                msg = f"Saving... ({count})" if count > 1 else "Saving..."
+                app.after(0, lambda: app.topbar.set_sync_status(msg))
+            else:
+                from datetime import datetime as _dt
+                ts = _dt.now().strftime("%H:%M:%S")
+                app.after(0, lambda: app.topbar.set_sync_status(f"Saved {ts}"))
+        except Exception:
+            pass
+
+    db.set_pending_writes_callback(_on_pending)
+
     try:
         app.mainloop()
     finally:
+        # Make sure queued writes finish before we exit.
+        try:
+            import time
+            deadline = time.time() + 8
+            while db._pending_writes > 0 and time.time() < deadline:
+                time.sleep(0.1)
+        except Exception:
+            pass
+        db.flush_sync()
+        db.stop_writer()
         db.stop_background_sync()

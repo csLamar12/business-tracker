@@ -1,3 +1,4 @@
+import queue
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -47,12 +48,36 @@ def sync():
 
 _sync_thread = None
 _sync_stop = threading.Event()
+_sync_pending = threading.Event()  # set after a local write; wakes the loop
+
+
+def schedule_sync():
+    """Mark that there are unsynced writes. The background loop will pick this
+    up on its next iteration (immediately, since it waits on the event)."""
+    _sync_pending.set()
+
+
+def flush_sync(timeout: float = 5.0) -> bool:
+    """Force a sync now and block until done (or timeout). Called on app close
+    so the last writes hit Turso before exit. Returns True on success."""
+    try:
+        with _lock:
+            get_connection().sync()
+        _sync_pending.clear()
+        return True
+    except Exception as e:
+        print(f"[db.flush_sync] {e}")
+        return False
 
 
 def start_background_sync(interval_seconds=10, on_synced=None, on_error=None):
-    """Periodically sync with remote so changes from other clients show up.
-    on_synced(): invoked (from the sync thread) after each successful sync.
-    on_error(exc, consecutive_failures): invoked when a sync attempt fails.
+    """Periodically sync with remote so changes from other clients show up,
+    AND pushes local writes promptly (within ~50ms) without blocking the UI.
+
+    The loop waits on a Condition that is woken either by the periodic timer
+    OR by schedule_sync() being called after a local write. This means saves
+    are non-blocking from the UI's perspective: write locally, return
+    immediately, sync happens shortly after on this background thread.
 
     Failures are exponentially backed off (max 5 minutes) and only logged on
     transitions, so a network blip doesn't flood the console.
@@ -64,7 +89,12 @@ def start_background_sync(interval_seconds=10, on_synced=None, on_error=None):
         max_wait = 300
         failures = 0
         last_logged_failure = False
-        while not _sync_stop.wait(wait):
+        while not _sync_stop.is_set():
+            # Wake on pending-write event OR after the timeout.
+            triggered = _sync_pending.wait(timeout=wait)
+            if _sync_stop.is_set():
+                break
+            _sync_pending.clear()
             try:
                 with _lock:
                     get_connection().sync()
@@ -86,6 +116,9 @@ def start_background_sync(interval_seconds=10, on_synced=None, on_error=None):
                     except Exception:
                         pass
                 wait = min(max_wait, interval_seconds * (2 ** min(failures, 5)))
+                # Re-mark pending so we retry on next loop instead of waiting
+                # for the next user write.
+                _sync_pending.set()
 
     if _sync_thread is None:
         _sync_thread = threading.Thread(target=_loop, daemon=True)
@@ -94,6 +127,110 @@ def start_background_sync(interval_seconds=10, on_synced=None, on_error=None):
 
 def stop_background_sync():
     _sync_stop.set()
+    _sync_pending.set()  # wake the loop so it can observe the stop flag
+
+
+# ---------- Write worker ----------
+#
+# libsql's embedded replica forwards every write to the remote Turso primary
+# synchronously. That makes `INSERT`/`UPDATE` calls take ~1s each over a
+# typical home internet connection. If those run on the Tk main thread, the
+# UI freezes for that whole second on every save.
+#
+# Solution: a single dedicated writer thread that drains a queue. The UI
+# submits a write callable + an on-done callback, returns immediately, and
+# keeps repainting / accepting input. Writes serialize through this thread
+# so we never have two writes contending on the same connection.
+
+_write_queue: "queue.Queue" = queue.Queue()
+_writer_thread = None
+_writer_stop = threading.Event()
+_pending_writes = 0
+_pending_lock = threading.Lock()
+_on_pending_change = None  # optional callback(count) for UI indicators
+
+
+def _writer_loop():
+    while not _writer_stop.is_set():
+        try:
+            item = _write_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if item is None:
+            break
+        fn, on_done, on_error = item
+        try:
+            fn()
+        except Exception as e:
+            print(f"[db.writer] {e}")
+            if on_error:
+                try:
+                    on_error(e)
+                except Exception:
+                    pass
+        else:
+            if on_done:
+                try:
+                    on_done()
+                except Exception:
+                    pass
+        finally:
+            _decrement_pending()
+
+
+def _start_writer():
+    global _writer_thread
+    if _writer_thread is None:
+        _writer_thread = threading.Thread(target=_writer_loop, daemon=True)
+        _writer_thread.start()
+
+
+def _increment_pending():
+    global _pending_writes
+    with _pending_lock:
+        _pending_writes += 1
+        count = _pending_writes
+    if _on_pending_change:
+        try:
+            _on_pending_change(count)
+        except Exception:
+            pass
+
+
+def _decrement_pending():
+    global _pending_writes
+    with _pending_lock:
+        _pending_writes = max(0, _pending_writes - 1)
+        count = _pending_writes
+    if _on_pending_change:
+        try:
+            _on_pending_change(count)
+        except Exception:
+            pass
+
+
+def set_pending_writes_callback(cb):
+    """Register a callback invoked (from any thread) whenever the count of
+    in-flight background writes changes. Use to drive a UI 'Saving...' indicator.
+    """
+    global _on_pending_change
+    _on_pending_change = cb
+
+
+def submit_write(fn, on_done=None, on_error=None):
+    """Queue `fn` to run on the background writer thread. UI thread returns
+    instantly. on_done() (if provided) runs on the writer thread after a
+    successful write — callers should marshal back to the Tk main thread
+    via `widget.after(0, ...)` for any UI updates.
+    """
+    _start_writer()
+    _increment_pending()
+    _write_queue.put((fn, on_done, on_error))
+
+
+def stop_writer():
+    _writer_stop.set()
+    _write_queue.put(None)
 
 
 class Row:
@@ -138,18 +275,16 @@ def _execute(sql, params=()):
 @contextmanager
 def get_conn():
     """Compat shim — yields an object with .execute() that mirrors the old API.
-    Writes are committed locally then synced to Turso on exit.
+    Writes are committed to the local replica only; the background sync thread
+    pushes them to Turso shortly after (non-blocking, so the UI stays snappy).
     """
     with _lock:
         conn = get_connection()
         shim = _ConnShim(conn)
         yield shim
         conn.commit()
-        if shim.had_write:
-            try:
-                conn.sync()
-            except Exception as e:
-                print(f"[db.sync after write] {e}")
+    if shim.had_write:
+        schedule_sync()
 
 
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "ALTER", "CREATE", "DROP", "REPLACE")

@@ -980,10 +980,9 @@ class DetailPane(ctk.CTkFrame):
 
 
 class TopBar(ctk.CTkFrame):
-    def __init__(self, master, on_currency_change, on_switch_profile, on_check_updates, on_backup):
-        super().__init__(master, height=56, corner_radius=0, fg_color="#1f1f1f")
+    def __init__(self, master, on_switch_profile, on_check_updates, on_backup):
+        super().__init__(master, height=48, corner_radius=0, fg_color="#1f1f1f")
         self.pack_propagate(False)
-        self.on_currency_change = on_currency_change
         self.on_switch_profile = on_switch_profile
         self.on_check_updates = on_check_updates
         self.on_backup = on_backup
@@ -999,7 +998,9 @@ class TopBar(ctk.CTkFrame):
         )
         self.sync_label.pack(side="left", padx=8)
 
-        # Profile badge — colored pill with current profile name; click to switch.
+        # Right-aligned cluster: version, backup, check for updates, profile.
+        # Pack in reverse visual order because side="right" stacks right→left.
+        # Profile badge — colored pill, click to switch.
         active = user_profile.get_active() or "?"
         self.profile_btn = ctk.CTkButton(
             self, text=f"●  {active}", width=140, height=30,
@@ -1008,44 +1009,24 @@ class TopBar(ctk.CTkFrame):
             command=self.on_switch_profile,
             font=ctk.CTkFont(size=12, weight="bold"),
         )
-        self.profile_btn.pack(side="left", padx=(16, 0))
+        self.profile_btn.pack(side="right", padx=(8, 16))
 
-        # Version + manual check
-        ctk.CTkButton(
-            self, text="Check for updates", width=130, height=24,
-            fg_color="transparent", hover_color="#333333",
-            text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
-            command=self.on_check_updates,
-        ).pack(side="left", padx=(12, 4))
+        ctk.CTkLabel(
+            self, text=f"v{__version__}", text_color="gray50",
+            font=ctk.CTkFont(size=11),
+        ).pack(side="right", padx=(4, 8))
         ctk.CTkButton(
             self, text="Backup", width=70, height=24,
             fg_color="transparent", hover_color="#333333",
             text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
             command=self.on_backup,
-        ).pack(side="left", padx=(4, 4))
-        ctk.CTkLabel(
-            self, text=f"v{__version__}", text_color="gray50",
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left")
-
-        # FX rate (right side first so currency picker sits inside it visually)
-        ctk.CTkButton(
-            self, text="Save Rate", width=90, command=self._save_rate
-        ).pack(side="right", padx=(4, 16))
-
-        self.rate_entry = ctk.CTkEntry(self, width=80)
-        self.rate_entry.insert(0, f"{db.get_fx_rate():.2f}")
-        self.rate_entry.pack(side="right", padx=4)
-
-        ctk.CTkLabel(self, text="Rate for new entries (JMD per 1 USD):").pack(side="right", padx=(16, 4))
-
-        self.currency_var = ctk.StringVar(value=db.get_display_currency())
-        ctk.CTkOptionMenu(
-            self, values=db.CURRENCIES, variable=self.currency_var,
-            width=90, command=self._change_currency,
         ).pack(side="right", padx=4)
-
-        ctk.CTkLabel(self, text="Display Currency:").pack(side="right", padx=(16, 4))
+        ctk.CTkButton(
+            self, text="Check for updates", width=130, height=24,
+            fg_color="transparent", hover_color="#333333",
+            text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
+            command=self.on_check_updates,
+        ).pack(side="right", padx=4)
 
     def set_sync_status(self, text):
         try:
@@ -1059,6 +1040,40 @@ class TopBar(ctk.CTkFrame):
             text=f"●  {active}",
             fg_color=user_profile.color_for(active),
         )
+
+
+class BottomBar(ctk.CTkFrame):
+    """Footer with currency display picker + FX rate for new transactions."""
+
+    def __init__(self, master, on_currency_change):
+        super().__init__(master, height=44, corner_radius=0, fg_color="#1a1a1a")
+        self.pack_propagate(False)
+        self.on_currency_change = on_currency_change
+
+        # Left side: display currency
+        ctk.CTkLabel(self, text="Display:", text_color="gray60",
+                     font=ctk.CTkFont(size=11)).pack(side="left", padx=(20, 4))
+        self.currency_var = ctk.StringVar(value=db.get_display_currency())
+        ctk.CTkOptionMenu(
+            self, values=db.CURRENCIES, variable=self.currency_var,
+            width=80, height=26, command=self._change_currency,
+        ).pack(side="left", padx=4)
+
+        # Right side: rate for NEW transactions
+        ctk.CTkButton(
+            self, text="Save Rate", width=80, height=26,
+            command=self._save_rate,
+        ).pack(side="right", padx=(4, 20))
+
+        self.rate_entry = ctk.CTkEntry(self, width=80, height=26)
+        self.rate_entry.insert(0, f"{db.get_fx_rate():.2f}")
+        self.rate_entry.pack(side="right", padx=4)
+
+        ctk.CTkLabel(
+            self,
+            text="Rate for new entries (JMD per 1 USD):",
+            text_color="gray60", font=ctk.CTkFont(size=11),
+        ).pack(side="right", padx=(16, 4))
 
     def _change_currency(self, value):
         db.set_display_currency(value)
@@ -1133,7 +1148,6 @@ class App(ctk.CTk):
 
         self.topbar = TopBar(
             self,
-            on_currency_change=self._on_currency_change,
             on_switch_profile=self._switch_profile,
             on_check_updates=lambda: self._check_for_updates(manual=True),
             on_backup=self._export_backup,
@@ -1142,6 +1156,10 @@ class App(ctk.CTk):
 
         # Update banner sits between topbar and body — hidden until needed.
         self.update_banner = UpdateBanner(self)
+
+        # Bottom bar packed before body so body fills the middle.
+        self.bottombar = BottomBar(self, on_currency_change=self._on_currency_change)
+        self.bottombar.pack(side="bottom", fill="x")
 
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True)

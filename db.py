@@ -289,6 +289,28 @@ def get_conn():
 
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "ALTER", "CREATE", "DROP", "REPLACE")
 
+# Safety rail: refuse bulk DELETE/DROP/TRUNCATE statements unless the caller
+# explicitly sets BT_ALLOW_DESTRUCTIVE=1. The Tk app never issues these — only
+# ad-hoc smoke tests / cleanup scripts do, and those have wiped real data in
+# the past. Hard NO by default.
+import os as _os
+_ALLOW_DESTRUCTIVE = _os.environ.get("BT_ALLOW_DESTRUCTIVE") == "1"
+
+
+def _is_destructive_bulk(sql: str) -> bool:
+    s = sql.strip().upper()
+    # Per-row updates/deletes that scope to a single id are fine; only block
+    # statements that could wipe many rows.
+    if s.startswith("DROP "):
+        return True
+    if s.startswith("TRUNCATE"):
+        return True
+    if s.startswith("DELETE FROM") and "WHERE" not in s:
+        return True
+    if s.startswith("UPDATE ") and "WHERE" not in s:
+        return True
+    return False
+
 
 class _ConnShim:
     def __init__(self, conn):
@@ -296,6 +318,13 @@ class _ConnShim:
         self.had_write = False
 
     def execute(self, sql, params=()):
+        if _is_destructive_bulk(sql) and not _ALLOW_DESTRUCTIVE:
+            raise RuntimeError(
+                "Refusing bulk destructive SQL (DELETE-all / UPDATE-all / "
+                "DROP / TRUNCATE) against the shared Turso DB. If you really "
+                "mean it, set BT_ALLOW_DESTRUCTIVE=1. SQL: "
+                + sql.strip()[:120]
+            )
         if sql.lstrip().upper().startswith(_WRITE_VERBS):
             self.had_write = True
         cur = self._conn.execute(sql, params)

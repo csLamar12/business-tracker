@@ -980,12 +980,13 @@ class DetailPane(ctk.CTkFrame):
 
 
 class TopBar(ctk.CTkFrame):
-    def __init__(self, master, on_currency_change, on_switch_profile, on_check_updates):
+    def __init__(self, master, on_currency_change, on_switch_profile, on_check_updates, on_backup):
         super().__init__(master, height=56, corner_radius=0, fg_color="#1f1f1f")
         self.pack_propagate(False)
         self.on_currency_change = on_currency_change
         self.on_switch_profile = on_switch_profile
         self.on_check_updates = on_check_updates
+        self.on_backup = on_backup
 
         ctk.CTkLabel(
             self, text="Business Tracker",
@@ -1016,6 +1017,12 @@ class TopBar(ctk.CTkFrame):
             text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
             command=self.on_check_updates,
         ).pack(side="left", padx=(12, 4))
+        ctk.CTkButton(
+            self, text="Backup", width=70, height=24,
+            fg_color="transparent", hover_color="#333333",
+            text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
+            command=self.on_backup,
+        ).pack(side="left", padx=(4, 4))
         ctk.CTkLabel(
             self, text=f"v{__version__}", text_color="gray50",
             font=ctk.CTkFont(size=11),
@@ -1129,6 +1136,7 @@ class App(ctk.CTk):
             on_currency_change=self._on_currency_change,
             on_switch_profile=self._switch_profile,
             on_check_updates=lambda: self._check_for_updates(manual=True),
+            on_backup=self._export_backup,
         )
         self.topbar.pack(side="top", fill="x")
 
@@ -1161,6 +1169,41 @@ class App(ctk.CTk):
     def _on_currency_change(self):
         # Re-render the current detail view with new currency / rate.
         self.detail.show(self.sidebar.selected_id)
+
+    def _export_backup(self):
+        """Dump every table to a JSON file so the user has an offline snapshot."""
+        from tkinter import filedialog
+        import json
+        from datetime import datetime as _dt
+
+        default_name = f"business-tracker-backup-{_dt.now().strftime('%Y%m%d-%H%M%S')}.json"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile=default_name,
+            filetypes=[("JSON backup", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            data = {}
+            for table in ("businesses", "income", "expenses", "plans",
+                          "profiles", "settings"):
+                with db.get_conn() as c:
+                    rows = c.execute(f"SELECT * FROM {table}").fetchall()
+                data[table] = [{k: r[k] for k in r.keys()} for r in rows]
+            with open(path, "w") as f:
+                json.dump({
+                    "exported_at": _dt.now().isoformat(),
+                    "app_version": __version__,
+                    "tables": data,
+                }, f, indent=2, default=str)
+            messagebox.showinfo(
+                "Backup saved",
+                f"Snapshot saved to:\n{path}\n\n"
+                f"Counts: " + ", ".join(f"{k}={len(v)}" for k, v in data.items()),
+            )
+        except Exception as e:
+            messagebox.showerror("Backup failed", str(e))
 
     def _switch_profile(self):
         def _picked(_name):

@@ -14,9 +14,13 @@ from version import __version__
 
 
 class DateEntry(_RawDateEntry):
-    """tkcalendar.DateEntry binds <<ThemeChanged>> with a lambda that requires
-    an event arg, but CustomTkinter triggers theme-change events without one,
-    which spams TypeErrors. Rebind it to swallow any args.
+    """tkcalendar.DateEntry tweaks for CustomTkinter on macOS:
+
+    1. CustomTkinter fires <<ThemeChanged>> events without an event arg, but
+       tkcalendar's handler is bound expecting one. Rebind to swallow args.
+    2. The dropdown calendar is a tk.Toplevel that, in a CTk window context
+       on macOS, can appear behind the main window or never receive focus.
+       Override drop_down to forcibly raise + focus it.
     """
 
     def __init__(self, *args, **kwargs):
@@ -25,6 +29,18 @@ class DateEntry(_RawDateEntry):
             "<<ThemeChanged>>",
             lambda *_a, **_k: self.after(10, self._on_theme_change),
         )
+
+    def drop_down(self):
+        super().drop_down()
+        try:
+            if self._calendar.winfo_ismapped():
+                # Force the popup to the front on macOS / CTk.
+                self._top_cal.lift()
+                self._top_cal.attributes("-topmost", True)
+                self._top_cal.focus_force()
+                self._calendar.focus_set()
+        except Exception:
+            pass
 
 
 ctk.set_appearance_mode("dark")

@@ -58,6 +58,7 @@ jobs:
             --osx-bundle-identifier com.anchorpointja.businesstracker \
             --collect-all customtkinter \
             --collect-all tkcalendar \
+            --collect-all babel \
             --collect-all libsql \
             main.py
           cd dist
@@ -71,6 +72,7 @@ jobs:
             --name "BusinessTracker" \
             --collect-all customtkinter \
             --collect-all tkcalendar \
+            --collect-all babel \
             --collect-all libsql \
             main.py
           cd dist

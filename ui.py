@@ -2,7 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox
 from datetime import date, datetime
-from tkcalendar import DateEntry as _RawDateEntry
+from tkcalendar import Calendar as _RawCalendar
 
 import threading
 import webbrowser
@@ -13,34 +13,107 @@ import updater
 from version import __version__
 
 
-class DateEntry(_RawDateEntry):
-    """tkcalendar.DateEntry tweaks for CustomTkinter on macOS:
-
-    1. CustomTkinter fires <<ThemeChanged>> events without an event arg, but
-       tkcalendar's handler is bound expecting one. Rebind to swallow args.
-    2. The dropdown calendar is a tk.Toplevel that, in a CTk window context
-       on macOS, can appear behind the main window or never receive focus.
-       Override drop_down to forcibly raise + focus it.
+class _CalendarModal(ctk.CTkToplevel):
+    """Modal date picker. Shows a tkcalendar.Calendar inside a CTkToplevel
+    we control (instead of tkcalendar.DateEntry's flaky popup Toplevel,
+    which renders broken in CTk+macOS).
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.bind(
-            "<<ThemeChanged>>",
-            lambda *_a, **_k: self.after(10, self._on_theme_change),
-        )
-
-    def drop_down(self):
-        super().drop_down()
+    def __init__(self, master, initial: date, on_pick):
+        super().__init__(master)
+        self.title("Pick a date")
+        self.geometry("320x320")
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
         try:
-            if self._calendar.winfo_ismapped():
-                # Force the popup to the front on macOS / CTk.
-                self._top_cal.lift()
-                self._top_cal.attributes("-topmost", True)
-                self._top_cal.focus_force()
-                self._calendar.focus_set()
+            self.grab_set()
         except Exception:
             pass
+        self.on_pick = on_pick
+
+        self._cal = _RawCalendar(
+            self, selectmode="day",
+            year=initial.year, month=initial.month, day=initial.day,
+            date_pattern="yyyy-mm-dd",
+            background="#1f6aa5", foreground="white",
+            selectbackground="#1f6aa5", selectforeground="white",
+            normalbackground="#2b2b2b", normalforeground="white",
+            weekendbackground="#2b2b2b", weekendforeground="#cccccc",
+            othermonthbackground="#1f1f1f", othermonthforeground="gray50",
+            headersbackground="#1f1f1f", headersforeground="white",
+            bordercolor="#1f1f1f",
+        )
+        self._cal.pack(fill="both", expand=True, padx=10, pady=10)
+        self._cal.bind("<<CalendarSelected>>", lambda _e: None)
+        self._cal.bind("<Double-1>", lambda _e: self._ok())
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(btns, text="Cancel", fg_color="gray30",
+                      width=80, command=self.destroy).pack(side="right", padx=4)
+        ctk.CTkButton(btns, text="OK", width=80, command=self._ok).pack(side="right", padx=4)
+
+        self.bind("<Return>", lambda _e: self._ok())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        # Ensure we're actually visible + focused on macOS.
+        self.update_idletasks()
+        self.lift()
+        self.focus_force()
+
+    def _ok(self):
+        try:
+            value = self._cal.selection_get()  # returns datetime.date
+        except Exception:
+            value = date.today()
+        try:
+            self.on_pick(value)
+        finally:
+            self.destroy()
+
+
+class DateEntry(ctk.CTkButton):
+    """API-compatible drop-in for tkcalendar.DateEntry: get_date() / set_date().
+    Click opens a modal _CalendarModal. Replaces the flaky tkcalendar popup.
+    """
+
+    def __init__(self, master, date_pattern="yyyy-mm-dd", width=110, height=28,
+                 **kwargs):
+        # Discard tkcalendar-specific kwargs we don't use.
+        for k in ("background", "foreground", "borderwidth", "date_pattern"):
+            kwargs.pop(k, None)
+        self._date = date.today()
+        super().__init__(
+            master,
+            text=self._date.isoformat(),
+            width=width, height=height,
+            fg_color="#1f6aa5", hover_color="#144870",
+            anchor="w",
+            command=self._open_picker,
+            **kwargs,
+        )
+
+    def get_date(self) -> date:
+        return self._date
+
+    def set_date(self, d):
+        if isinstance(d, str):
+            try:
+                d = date.fromisoformat(d.strip())
+            except Exception:
+                d = date.today()
+        self._date = d
+        try:
+            self.configure(text=d.isoformat())
+        except Exception:
+            pass
+
+    def get(self) -> str:
+        """tkcalendar parity — return the date as the formatted string."""
+        return self._date.isoformat()
+
+    def _open_picker(self):
+        _CalendarModal(self, self._date, on_pick=self.set_date)
 
 
 ctk.set_appearance_mode("dark")
@@ -407,20 +480,20 @@ class DataTable(ctk.CTkFrame):
                         lambda _e: self._commit(editor, row_id, col_key, kind))
             editor.bind("<Escape>", lambda _e: self._cancel_edit())
         elif kind == "date":
-            editor = DateEntry(self.tree, date_pattern="yyyy-mm-dd",
-                               background="#1f6aa5", foreground="white",
-                               borderwidth=0)
+            # Date columns get a modal calendar picker (no in-cell widget).
+            # On OK, commit straight away via on_edit; on Cancel, do nothing.
             try:
-                editor.set_date(str(current) if current else date.today().isoformat())
+                initial = date.fromisoformat(str(current))
             except Exception:
-                editor.set_date(date.today())
-            editor.place(x=x, y=y, width=w, height=h)
-            editor.focus_set()
-            editor.bind("<<DateEntrySelected>>",
-                        lambda _e: self._commit(editor, row_id, col_key, kind))
-            editor.bind("<Return>",
-                        lambda _e: self._commit(editor, row_id, col_key, kind))
-            editor.bind("<Escape>", lambda _e: self._cancel_edit())
+                initial = date.today()
+
+            def _commit_date(picked):
+                if self.on_edit:
+                    self.on_edit(row_id, col_key, picked.isoformat())
+
+            _CalendarModal(self.tree, initial, on_pick=_commit_date)
+            self._editor = None
+            return
         else:
             editor = tk.Entry(self.tree, bg="#3a3a3a", fg="white",
                               insertbackground="white", relief="flat")
@@ -440,9 +513,7 @@ class DataTable(ctk.CTkFrame):
         if editor is not self._editor:
             return
         try:
-            if kind == "date":
-                value = editor.get_date().isoformat()
-            elif kind == "number":
+            if kind == "number":
                 raw = editor.get().strip()
                 if raw == "":
                     self._cancel_edit()

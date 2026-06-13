@@ -2,6 +2,8 @@
 
 Cross-platform desktop app (Python + CustomTkinter) for tracking multiple businesses, their subsidiaries, income, expenses, plans, and current operating phase. Backed by [Turso](https://turso.tech) so multiple users share the same data.
 
+> **Also in this repo:** [`schoolhub/`](schoolhub/README.md) — **SchoolHub Jamaica**, a multi-tenant Next.js website platform for Jamaican high schools (subdomain or custom-domain school sites + an admin CMS). It runs on anchorpointja.com during development and is independent of the desktop app below.
+
 ## Features
 
 - Multiple top-level businesses, each with nested subsidiaries

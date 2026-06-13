@@ -1,0 +1,210 @@
+// SchoolHub Jamaica — data model
+//
+// NOTE: SQLite is used for the scaffold so everything runs with zero external
+// services. SQLite (via Prisma) does not support native enums, so "enum-like"
+// fields (plan, role, calendar category) are plain strings validated in the app
+// layer — see lib/constants.ts for the allowed values. To go to production on
+// Postgres: change `provider` below to "postgresql", point DATABASE_URL at your
+// database, and (optionally) promote those string fields to real enums.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenant: one row per school
+// ---------------------------------------------------------------------------
+model School {
+  id        String  @id @default(cuid())
+  name      String
+  subdomain String  @unique // e.g. "kingston-college" -> kingston-college.<root domain>
+  // Premium plan only. Stored normalized (lowercase, no scheme), e.g. "www.kc.edu.jm"
+  customDomain String? @unique
+  plan      String  @default("STANDARD") // STANDARD | PREMIUM  (see lib/constants.ts)
+  published Boolean @default(false)
+
+  // Branding / identity
+  tagline        String?
+  motto          String?
+  aboutHtml      String? // simple HTML/markdown-ish body shown on the About section
+  logoUrl        String?
+  heroImageUrl   String?
+  primaryColor   String  @default("#0a4d8c")
+  secondaryColor String  @default("#f5a623")
+
+  // Contact / location
+  principalName String?
+  foundedYear   Int?
+  addressLine   String?
+  parish        String?
+  phone         String?
+  email         String?
+
+  // Socials
+  facebookUrl  String?
+  instagramUrl String?
+  twitterUrl   String?
+  youtubeUrl   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  announcements Announcement[]
+  events        Event[]
+  calendar      CalendarEntry[]
+  staff         StaffMember[]
+  achievements  Achievement[]
+  alumni        AlumniProfile[]
+  admissions    AdmissionsInfo?
+
+  @@index([plan])
+}
+
+// ---------------------------------------------------------------------------
+// Auth: platform super-admins (schoolId null) and per-school admins/editors
+// ---------------------------------------------------------------------------
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("SCHOOL_ADMIN") // SUPERADMIN | SCHOOL_ADMIN | EDITOR
+  schoolId     String?
+  school       School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@index([schoolId])
+}
+
+// ---------------------------------------------------------------------------
+// Content types
+// ---------------------------------------------------------------------------
+model Announcement {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  pinned      Boolean  @default(false)
+  published   Boolean  @default(true)
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([schoolId])
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  schoolId    String
+  school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  location    String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  imageUrl    String?
+  published   Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([schoolId])
+}
+
+model CalendarEntry {
+  id          String    @id @default(cuid())
+  schoolId    String
+  school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  category    String    @default("OTHER") // TERM | HOLIDAY | EXAM | SPORTS | PTA | OTHER
+  startDate   DateTime
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([schoolId])
+}
+
+model StaffMember {
+  id         String   @id @default(cuid())
+  schoolId   String
+  school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name       String
+  title      String
+  department String?
+  bio        String?
+  email      String?
+  photoUrl   String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([schoolId])
+}
+
+model Achievement {
+  id          String    @id @default(cuid())
+  schoolId    String
+  school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  studentName String?
+  description String?
+  category    String? // e.g. Academics, Sports, Arts, CSEC, CAPE
+  achievedOn  DateTime?
+  imageUrl    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([schoolId])
+}
+
+model AlumniProfile {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name        String
+  gradYear    Int?
+  email       String?
+  currentRole String?
+  message     String?
+  approved    Boolean  @default(false) // alumni self-register; an admin approves before it shows publicly
+  createdAt   DateTime @default(now())
+
+  @@index([schoolId])
+}
+
+model AdmissionsInfo {
+  id              String    @id @default(cuid())
+  schoolId        String    @unique
+  school          School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  introHtml       String?
+  requirementsHtml String?
+  processHtml     String?
+  feesHtml        String?
+  applyUrl        String?
+  opensOn         DateTime?
+  closesOn        DateTime?
+  updatedAt       DateTime  @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Platform-level lead capture from the marketing site contact form
+// ---------------------------------------------------------------------------
+model ContactMessage {
+  id         String   @id @default(cuid())
+  name       String
+  email      String
+  schoolName String?
+  phone      String?
+  plan       String? // which plan they're interested in (STANDARD | PREMIUM)
+  message    String
+  handled    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}

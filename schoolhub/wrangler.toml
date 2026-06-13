@@ -1,8 +1,5 @@
 # Cloudflare Workers configuration for SchoolHub Jamaica (via OpenNext).
 #
-# The Worker is named to match the repository's existing Cloudflare Workers
-# service ("business-tracker"); rename if you create a dedicated service.
-#
 # Deploy:  npm run cf:deploy        (build + deploy)
 # Preview: npm run cf:preview       (build + run locally in workerd)
 #
@@ -12,7 +9,7 @@
 #   - AUTH_SECRET
 # And set NEXT_PUBLIC_ROOT_DOMAIN as a *build* variable (it is inlined at build).
 
-name = "business-tracker"
+name = "schoolhub-jamaica"
 main = ".open-next/worker.js"
 compatibility_date = "2024-12-30"
 compatibility_flags = ["nodejs_compat"]

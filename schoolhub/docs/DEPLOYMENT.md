@@ -78,28 +78,23 @@ NEXT_PUBLIC_ROOT_DOMAIN=schoolhubja.com npm run cf:deploy
 
 `npm run cf:preview` builds and runs the Worker locally in workerd.
 
-### Option B: Cloudflare Workers Builds (Git integration) — fixes the PR's CI check
+### Option B: Cloudflare Workers Builds (Git integration)
 
-The repo's existing "Workers Builds: business-tracker" check builds the **repo
-root**, which has no Worker — so it fails. Point it at this app:
-
-In the Cloudflare dashboard → Workers & Pages → *business-tracker* → Settings →
-**Builds**:
+Connect this repository to a Cloudflare Workers project for automatic deploys on
+push. In the Cloudflare dashboard → Workers & Pages → Create → connect the
+`schoolhub-jamaica` repo, then under the Worker's Settings → **Builds**:
 
 | Setting              | Value                                  |
 | -------------------- | -------------------------------------- |
-| Root directory       | `schoolhub`                            |
+| Root directory       | `/` (repository root)                  |
 | Build command        | `npm run cf:build`                     |
 | Deploy command       | `npx opennextjs-cloudflare deploy`     |
 | Build variable       | `NEXT_PUBLIC_ROOT_DOMAIN = schoolhubja.com` (or `anchorpointja.com` for dev) |
 
 Then add the runtime secrets (`DATABASE_URL`, `AUTH_SECRET`) under the Worker's
-Settings → Variables and Secrets. After saving, re-run the build — it will build
-this app instead of failing on the repo root.
+Settings → Variables and Secrets.
 
-> `wrangler.toml` sets the Worker `name = "business-tracker"` to match that
-> service. Rename it (and the service) if you'd prefer a dedicated `schoolhub`
-> Worker.
+> `wrangler.toml` sets the Worker `name = "schoolhub-jamaica"`.
 
 ---
 
@@ -137,7 +132,7 @@ Once routed, a school with subdomain `kingston-college` is live at
 ## 6. Local development
 
 ```bash
-cd schoolhub
+cd schoolhub-jamaica
 cp .env.example .env            # set AUTH_SECRET etc.
 
 # Option 1: an ephemeral local MongoDB replica set (downloads mongod once):

@@ -9,8 +9,8 @@ Each school gets either a **subdomain** (`yourschool.schoolhubja.com`) on the
 Standard plan, or its **own custom domain** (`www.yourschool.edu.jm`) on the
 Premium plan. During development the platform runs on **anchorpointja.com**.
 
-> This app lives in `schoolhub/` and is independent of the AnchorPoint Business
-> Tracker desktop app at the repository root.
+> SchoolHub Jamaica is its own project, independent of the AnchorPoint Business
+> Tracker desktop app.
 
 ## Tech stack
 
@@ -44,7 +44,7 @@ works out of the box.
 ## Local development
 
 ```bash
-cd schoolhub
+cd schoolhub-jamaica
 cp .env.example .env          # adjust AUTH_SECRET etc.
 npm install
 
@@ -98,7 +98,7 @@ Then open:
 ## Project structure
 
 ```
-schoolhub/
+schoolhub-jamaica/
 ├── app/
 │   ├── (marketing)/        Marketing site (landing, features, pricing, contact)
 │   ├── s/[domain]/         Per-school public sites (themed per school)

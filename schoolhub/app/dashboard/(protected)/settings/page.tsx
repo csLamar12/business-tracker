@@ -8,10 +8,11 @@ import { PLAN_INFO, PLANS } from "@/lib/constants";
 import { saveProfile, saveDomain } from "./actions";
 
 export default async function SettingsPage({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { saved?: string; error?: string };
+  searchParams: Promise<{ saved?: string; error?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const session = await getSession();
   const isSuperadmin = session?.role === "SUPERADMIN";

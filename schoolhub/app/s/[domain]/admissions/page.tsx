@@ -18,10 +18,11 @@ function Block({ title, html }: { title: string; html?: string | null }) {
 }
 
 export default async function AdmissionsPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { domain: string };
+  params: Promise<{ domain: string }>;
 }) {
+  const params = await paramsPromise;
   const school = await getSchoolByDomainParam(params.domain);
   if (!school) notFound();
 

@@ -24,7 +24,7 @@ export async function login(formData: FormData) {
 
   // School admins go straight to their school; superadmins pick one.
   if (user.schoolId) {
-    setActiveSchoolCookie(user.schoolId);
+    await setActiveSchoolCookie(user.schoolId);
     redirect("/");
   }
   redirect("/select-school");

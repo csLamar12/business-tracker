@@ -7,9 +7,10 @@ import { SiteFooter } from "@/components/site/SiteFooter";
 export async function generateMetadata({
   params,
 }: {
-  params: { domain: string };
+  params: Promise<{ domain: string }>;
 }): Promise<Metadata> {
-  const school = await getSchoolByDomainParam(params.domain);
+  const { domain } = await params;
+  const school = await getSchoolByDomainParam(domain);
   if (!school) return { title: "School not found" };
   return {
     title: {
@@ -26,9 +27,10 @@ export default async function SchoolLayout({
   params,
 }: {
   children: React.ReactNode;
-  params: { domain: string };
+  params: Promise<{ domain: string }>;
 }) {
-  const school = await getSchoolByDomainParam(params.domain);
+  const { domain } = await params;
+  const school = await getSchoolByDomainParam(domain);
   if (!school) notFound();
 
   return (

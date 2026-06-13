@@ -12,8 +12,8 @@ import {
 import { prisma } from "@/lib/db";
 
 export async function logout() {
-  destroySession();
-  clearActiveSchoolCookie();
+  await destroySession();
+  await clearActiveSchoolCookie();
   redirect("/login");
 }
 
@@ -29,12 +29,12 @@ export async function setActiveSchool(formData: FormData) {
   });
   if (!exists) redirect("/select-school");
 
-  setActiveSchoolCookie(schoolId);
+  await setActiveSchoolCookie(schoolId);
   redirect("/");
 }
 
 /** Superadmin returns to the school picker. */
 export async function switchSchool() {
-  clearActiveSchoolCookie();
+  await clearActiveSchoolCookie();
   redirect("/select-school");
 }

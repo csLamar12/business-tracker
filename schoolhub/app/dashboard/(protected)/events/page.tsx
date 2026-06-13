@@ -9,10 +9,11 @@ import { formatDateTime, toDateTimeInputValue } from "@/lib/format";
 import { saveEvent, deleteEvent } from "./actions";
 
 export default async function ManageEvents({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { edit?: string };
+  searchParams: Promise<{ edit?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const editing = searchParams.edit;
   const record =

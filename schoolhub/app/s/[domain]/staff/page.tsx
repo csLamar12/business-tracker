@@ -4,10 +4,11 @@ import { prisma } from "@/lib/db";
 import { PageHeader } from "@/components/site/Section";
 
 export default async function StaffPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { domain: string };
+  params: Promise<{ domain: string }>;
 }) {
+  const params = await paramsPromise;
   const school = await getSchoolByDomainParam(params.domain);
   if (!school) notFound();
 

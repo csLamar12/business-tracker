@@ -8,15 +8,14 @@
 # production
 /build
 
+# cloudflare / opennext
+/.open-next/
+/.wrangler/
+.dev.vars
+
 # local env files
 .env
 .env*.local
-
-# prisma local sqlite db
-*.db
-*.db-journal
-/prisma/dev.db
-/prisma/*.db
 
 # misc
 *.tsbuildinfo

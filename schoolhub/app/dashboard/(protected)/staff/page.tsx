@@ -8,10 +8,11 @@ import { DeleteButton } from "@/components/ui/DeleteButton";
 import { saveStaff, deleteStaff } from "./actions";
 
 export default async function ManageStaff({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { edit?: string };
+  searchParams: Promise<{ edit?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const editing = searchParams.edit;
   const record =

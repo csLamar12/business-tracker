@@ -9,10 +9,11 @@ import { formatDate, toDateInputValue } from "@/lib/format";
 import { saveAchievement, deleteAchievement } from "./actions";
 
 export default async function ManageAchievements({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { edit?: string };
+  searchParams: Promise<{ edit?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const editing = searchParams.edit;
   const record =

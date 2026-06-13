@@ -7,12 +7,14 @@ import { SubmitButton } from "@/components/ui/SubmitButton";
 import { registerAlumni } from "./actions";
 
 export default async function AlumniPage({
-  params,
-  searchParams,
+  params: paramsPromise,
+  searchParams: searchParamsPromise,
 }: {
-  params: { domain: string };
-  searchParams: { joined?: string; error?: string };
+  params: Promise<{ domain: string }>;
+  searchParams: Promise<{ joined?: string; error?: string }>;
 }) {
+  const params = await paramsPromise;
+  const searchParams = await searchParamsPromise;
   const school = await getSchoolByDomainParam(params.domain);
   if (!school) notFound();
 

@@ -14,9 +14,11 @@ Premium plan. During development the platform runs on **anchorpointja.com**.
 
 ## Tech stack
 
-- **Next.js 14** (App Router) + **TypeScript** + **React 18**
+- **Next.js 15** (App Router) + **TypeScript** + **React 19**
 - **Tailwind CSS** for styling (per-school theming via CSS variables)
-- **Prisma** ORM with **SQLite** for local dev (swap to Postgres for production)
+- **Prisma** ORM with **MongoDB**
+- Deploys to **Cloudflare Workers** via the **OpenNext** adapter; on Workers,
+  **Prisma Accelerate** connects to MongoDB
 - **jose** (JWT) + **bcryptjs** for cookie-session admin auth
 - **zod** for input validation
 
@@ -45,7 +47,13 @@ works out of the box.
 cd schoolhub
 cp .env.example .env          # adjust AUTH_SECRET etc.
 npm install
-npm run db:reset              # create + seed the SQLite database
+
+# Prisma + MongoDB needs a replica set. Either start an ephemeral local one
+# (downloads mongod on first run) and leave it running in its own terminal…
+npm run db:local
+# …or point DATABASE_URL at a MongoDB Atlas cluster instead.
+
+npm run db:reset              # push schema + seed sample data
 npm run dev                   # http://localhost:3000
 ```
 
@@ -75,12 +83,16 @@ Then open:
 | Command              | Description                                        |
 | -------------------- | -------------------------------------------------- |
 | `npm run dev`        | Start the dev server                               |
-| `npm run build`      | Generate the Prisma client and build for prod      |
-| `npm run start`      | Start the production server                        |
+| `npm run build`      | Generate the Prisma client and build (Node/Vercel) |
+| `npm run start`      | Start the production server (Node)                 |
+| `npm run cf:build`   | Build the Cloudflare Worker (OpenNext)             |
+| `npm run cf:preview` | Build + run the Worker locally in workerd          |
+| `npm run cf:deploy`  | Build + deploy to Cloudflare Workers               |
 | `npm run typecheck`  | TypeScript type-check                              |
-| `npm run db:push`    | Sync the schema to the database                    |
+| `npm run db:local`   | Start an ephemeral local MongoDB replica set       |
+| `npm run db:push`    | Sync the schema to MongoDB                         |
 | `npm run db:seed`    | Seed sample data                                   |
-| `npm run db:reset`   | Drop, recreate and seed the database               |
+| `npm run db:reset`   | Reset (force-push) and seed the database           |
 | `npm run db:studio`  | Open Prisma Studio                                 |
 
 ## Project structure
@@ -95,9 +107,12 @@ schoolhub/
 │   └── globals.css         Tailwind + component classes + brand CSS vars
 ├── components/             marketing / site / dashboard / ui components
 ├── lib/                    db, auth, tenant resolution, context, constants, format
-├── prisma/                 schema.prisma + seed.ts
+├── prisma/                 schema.prisma (MongoDB) + seed.ts
+├── scripts/                mongo-memory.mjs (local MongoDB replica set)
 ├── middleware.ts           Multi-tenant host routing
-└── docs/DEPLOYMENT.md      Hosting + DNS (anchorpointja.com & custom domains)
+├── wrangler.toml           Cloudflare Worker config
+├── open-next.config.ts     OpenNext (Next-on-Workers) config
+└── docs/DEPLOYMENT.md      Cloudflare Workers + MongoDB + DNS
 ```
 
 ## Subscriptions / billing
@@ -109,6 +124,7 @@ super-admin for now. See `docs/DEPLOYMENT.md` for where Stripe would slot in.
 
 ## Going to production
 
-See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for deploying to
-anchorpointja.com (dev) or schoolhubja.com (prod), configuring wildcard DNS,
-connecting school custom domains, and switching from SQLite to Postgres.
+See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for deploying to Cloudflare
+Workers, setting up MongoDB Atlas + Prisma Accelerate, configuring wildcard DNS
+on anchorpointja.com (dev) / schoolhubja.com (prod), and connecting school
+custom domains.

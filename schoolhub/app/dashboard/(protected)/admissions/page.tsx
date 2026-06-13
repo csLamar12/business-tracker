@@ -7,10 +7,11 @@ import { toDateInputValue } from "@/lib/format";
 import { saveAdmissions } from "./actions";
 
 export default async function ManageAdmissions({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { saved?: string };
+  searchParams: Promise<{ saved?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const info = await prisma.admissionsInfo.findUnique({
     where: { schoolId: school.id },

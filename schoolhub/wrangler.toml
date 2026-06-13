@@ -1,0 +1,27 @@
+# Cloudflare Workers configuration for SchoolHub Jamaica (via OpenNext).
+#
+# The Worker is named to match the repository's existing Cloudflare Workers
+# service ("business-tracker"); rename if you create a dedicated service.
+#
+# Deploy:  npm run cf:deploy        (build + deploy)
+# Preview: npm run cf:preview       (build + run locally in workerd)
+#
+# Secrets are NOT stored here. Set them with `wrangler secret put` or in the
+# Cloudflare dashboard (see docs/DEPLOYMENT.md):
+#   - DATABASE_URL   (a prisma://… Accelerate URL for Workers)
+#   - AUTH_SECRET
+# And set NEXT_PUBLIC_ROOT_DOMAIN as a *build* variable (it is inlined at build).
+
+name = "business-tracker"
+main = ".open-next/worker.js"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+# Non-secret runtime variable. Note NEXT_PUBLIC_ROOT_DOMAIN is also needed at
+# BUILD time (it is inlined into the client/middleware bundles).
+[vars]
+NEXT_PUBLIC_ROOT_DOMAIN = "anchorpointja.com"

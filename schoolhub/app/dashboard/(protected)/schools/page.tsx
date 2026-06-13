@@ -12,10 +12,11 @@ import { setActiveSchool } from "../../actions";
 import { createSchool, deleteSchool } from "./actions";
 
 export default async function ManageSchools({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { new?: string; created?: string; error?: string };
+  searchParams: Promise<{ new?: string; created?: string; error?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const session = await getSession();
   if (session?.role !== "SUPERADMIN") redirect("/");
 

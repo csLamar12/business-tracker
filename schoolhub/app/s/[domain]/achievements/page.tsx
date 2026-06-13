@@ -5,10 +5,11 @@ import { PageHeader } from "@/components/site/Section";
 import { formatDate } from "@/lib/format";
 
 export default async function AchievementsPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { domain: string };
+  params: Promise<{ domain: string }>;
 }) {
+  const params = await paramsPromise;
   const school = await getSchoolByDomainParam(params.domain);
   if (!school) notFound();
 

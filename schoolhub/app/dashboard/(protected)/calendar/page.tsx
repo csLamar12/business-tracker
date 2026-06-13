@@ -14,10 +14,11 @@ import {
 import { saveCalendarEntry, deleteCalendarEntry } from "./actions";
 
 export default async function ManageCalendar({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { edit?: string };
+  searchParams: Promise<{ edit?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const school = await requireActiveSchool();
   const editing = searchParams.edit;
   const record =

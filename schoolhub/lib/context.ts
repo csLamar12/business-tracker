@@ -19,7 +19,7 @@ export async function getActiveSchool() {
 
   let schoolId = session.schoolId;
   if (!schoolId) {
-    schoolId = cookies().get(ACTIVE_SCHOOL_COOKIE)?.value ?? null;
+    schoolId = (await cookies()).get(ACTIVE_SCHOOL_COOKIE)?.value ?? null;
   }
   if (!schoolId) return null;
 
@@ -33,8 +33,8 @@ export async function requireActiveSchool() {
   return school;
 }
 
-export function setActiveSchoolCookie(schoolId: string) {
-  cookies().set(ACTIVE_SCHOOL_COOKIE, schoolId, {
+export async function setActiveSchoolCookie(schoolId: string) {
+  (await cookies()).set(ACTIVE_SCHOOL_COOKIE, schoolId, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
@@ -42,8 +42,8 @@ export function setActiveSchoolCookie(schoolId: string) {
   });
 }
 
-export function clearActiveSchoolCookie() {
-  cookies().delete(ACTIVE_SCHOOL_COOKIE);
+export async function clearActiveSchoolCookie() {
+  (await cookies()).delete(ACTIVE_SCHOOL_COOKIE);
 }
 
 export function isSuperadmin(session: SessionPayload | null): boolean {

@@ -1,26 +1,27 @@
-// SchoolHub Jamaica — data model
+// SchoolHub Jamaica — data model (MongoDB)
 //
-// NOTE: SQLite is used for the scaffold so everything runs with zero external
-// services. SQLite (via Prisma) does not support native enums, so "enum-like"
-// fields (plan, role, calendar category) are plain strings validated in the app
-// layer — see lib/constants.ts for the allowed values. To go to production on
-// Postgres: change `provider` below to "postgresql", point DATABASE_URL at your
-// database, and (optionally) promote those string fields to real enums.
+// Runs on MongoDB so it can be deployed on Cloudflare Workers (via Prisma
+// Accelerate — see lib/db.ts and docs/DEPLOYMENT.md). For MongoDB, Prisma
+// emulates referential integrity in the client (relationMode = "prisma"), so
+// the `onDelete: Cascade` rules below are enforced by Prisma, not the database.
+//
+// "Enum-like" fields (plan, role, calendar category) are stored as plain
+// strings and validated in the app layer (lib/constants.ts).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 // ---------------------------------------------------------------------------
-// Tenant: one row per school
+// Tenant: one document per school
 // ---------------------------------------------------------------------------
 model School {
-  id        String  @id @default(cuid())
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
   name      String
   subdomain String  @unique // e.g. "kingston-college" -> kingston-college.<root domain>
   // Premium plan only. Stored normalized (lowercase, no scheme), e.g. "www.kc.edu.jm"
@@ -70,12 +71,12 @@ model School {
 // Auth: platform super-admins (schoolId null) and per-school admins/editors
 // ---------------------------------------------------------------------------
 model User {
-  id           String   @id @default(cuid())
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
   email        String   @unique
   name         String
   passwordHash String
   role         String   @default("SCHOOL_ADMIN") // SUPERADMIN | SCHOOL_ADMIN | EDITOR
-  schoolId     String?
+  schoolId     String?  @db.ObjectId
   school       School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
 
@@ -86,8 +87,8 @@ model User {
 // Content types
 // ---------------------------------------------------------------------------
 model Announcement {
-  id          String   @id @default(cuid())
-  schoolId    String
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
   school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   title       String
   body        String
@@ -101,8 +102,8 @@ model Announcement {
 }
 
 model Event {
-  id          String    @id @default(cuid())
-  schoolId    String
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String    @db.ObjectId
   school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   title       String
   description String?
@@ -118,8 +119,8 @@ model Event {
 }
 
 model CalendarEntry {
-  id          String    @id @default(cuid())
-  schoolId    String
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String    @db.ObjectId
   school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   title       String
   description String?
@@ -133,8 +134,8 @@ model CalendarEntry {
 }
 
 model StaffMember {
-  id         String   @id @default(cuid())
-  schoolId   String
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId   String   @db.ObjectId
   school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   name       String
   title      String
@@ -150,8 +151,8 @@ model StaffMember {
 }
 
 model Achievement {
-  id          String    @id @default(cuid())
-  schoolId    String
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String    @db.ObjectId
   school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   title       String
   studentName String?
@@ -166,8 +167,8 @@ model Achievement {
 }
 
 model AlumniProfile {
-  id          String   @id @default(cuid())
-  schoolId    String
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
   school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   name        String
   gradYear    Int?
@@ -181,24 +182,24 @@ model AlumniProfile {
 }
 
 model AdmissionsInfo {
-  id              String    @id @default(cuid())
-  schoolId        String    @unique
-  school          School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  introHtml       String?
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId         String    @unique @db.ObjectId
+  school           School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  introHtml        String?
   requirementsHtml String?
-  processHtml     String?
-  feesHtml        String?
-  applyUrl        String?
-  opensOn         DateTime?
-  closesOn        DateTime?
-  updatedAt       DateTime  @updatedAt
+  processHtml      String?
+  feesHtml         String?
+  applyUrl         String?
+  opensOn          DateTime?
+  closesOn         DateTime?
+  updatedAt        DateTime  @updatedAt
 }
 
 // ---------------------------------------------------------------------------
 // Platform-level lead capture from the marketing site contact form
 // ---------------------------------------------------------------------------
 model ContactMessage {
-  id         String   @id @default(cuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   name       String
   email      String
   schoolName String?

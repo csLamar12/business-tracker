@@ -10,11 +10,12 @@ export const metadata: Metadata = {
     "Get in touch with SchoolHub Jamaica to bring your high school online.",
 };
 
-export default function ContactPage({
-  searchParams,
+export default async function ContactPage({
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { plan?: string; sent?: string; error?: string };
+  searchParams: Promise<{ plan?: string; sent?: string; error?: string }>;
 }) {
+  const searchParams = await searchParamsPromise;
   const sent = searchParams.sent === "1";
   const error = searchParams.error;
   const selectedPlan = PLANS.includes(searchParams.plan as Plan)

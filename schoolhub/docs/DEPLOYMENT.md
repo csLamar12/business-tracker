@@ -1,20 +1,23 @@
 # Deployment & DNS — SchoolHub Jamaica
 
-This guide covers hosting the platform, wiring up wildcard subdomains on
-**anchorpointja.com** (development) and **schoolhubja.com** (production), and
-connecting a school's own **custom domain** (Premium plan).
+The app runs on **Cloudflare Workers** (via the [OpenNext Cloudflare adapter])
+with **MongoDB** for data. This guide covers configuring the Cloudflare Workers
+build that runs on this repo, the database, and DNS for wildcard subdomains
+(anchorpointja.com for dev, schoolhubja.com for prod) plus school custom domains.
+
+[OpenNext Cloudflare adapter]: https://opennext.js.org/cloudflare
 
 ---
 
 ## 1. Environment variables
 
-| Variable                  | Dev value              | Prod value          | Notes                                              |
-| ------------------------- | ---------------------- | ------------------- | -------------------------------------------------- |
-| `NEXT_PUBLIC_ROOT_DOMAIN` | `anchorpointja.com`    | `schoolhubja.com`   | The platform root; tenant subdomains hang off it.  |
-| `DATABASE_URL`            | `file:./dev.db`        | Postgres URL        | See §5 to switch to Postgres.                      |
-| `AUTH_SECRET`             | any long random string | strong random value | Signs admin session cookies. Generate with the cmd below. |
-| `SUPERADMIN_EMAIL`        | `admin@schoolhubja.com`| your address        | Seeded super-admin login.                          |
-| `SUPERADMIN_PASSWORD`     | `changeme123`          | strong password     | Change before any real deploy.                     |
+| Variable                  | Where                      | Example                                           | Notes |
+| ------------------------- | -------------------------- | ------------------------------------------------- | ----- |
+| `NEXT_PUBLIC_ROOT_DOMAIN` | **Build-time**             | `anchorpointja.com` (dev) / `schoolhubja.com`     | Inlined into the client + middleware at build, so it must be set as a *build* variable, not only a runtime secret. |
+| `DATABASE_URL`            | Runtime secret             | `prisma://accelerate.prisma-data.net/?api_key=…`  | On Workers this is a **Prisma Accelerate** URL (see §3). Locally/Vercel it's a direct `mongodb://…` / `mongodb+srv://…` URL. |
+| `AUTH_SECRET`             | Runtime secret             | 96-hex-char random string                         | Signs admin session cookies. |
+| `SUPERADMIN_EMAIL`        | Used only by the seed      | `admin@schoolhubja.com`                           | Seeded super-admin login. |
+| `SUPERADMIN_PASSWORD`     | Used only by the seed      | strong password                                   | Change before any real deploy. |
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
@@ -22,134 +25,161 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 ---
 
-## 2. Hosting on Vercel (recommended)
+## 2. MongoDB (Atlas)
 
-Next.js middleware-based multi-tenancy is a first-class Vercel pattern.
-
-1. Import the repo into Vercel and set the **Root Directory** to `schoolhub`.
-2. Add the environment variables from §1 (Production + Preview).
-3. Deploy. The default `*.vercel.app` URL serves the marketing site.
-
-### Domains to add in Vercel → Project → Settings → Domains
-
-For the **dev** root `anchorpointja.com`:
-
-- `anchorpointja.com` (apex)
-- `www.anchorpointja.com`
-- `app.anchorpointja.com` (admin dashboard)
-- `*.anchorpointja.com` (**wildcard** — every school subdomain)
-
-> Adding a `*.` wildcard domain on Vercel requires verifying the domain with
-> Vercel's nameservers, or adding the wildcard via the API/Domains UI. Vercel
-> then terminates SSL for all subdomains automatically.
-
-For **production** repeat with `schoolhubja.com` and flip
-`NEXT_PUBLIC_ROOT_DOMAIN` to `schoolhubja.com`.
-
----
-
-## 3. DNS records
-
-### Wildcard subdomains (the platform itself)
-
-At your DNS provider for `anchorpointja.com` (and later `schoolhubja.com`):
-
-| Type    | Name              | Value                  | Purpose                       |
-| ------- | ----------------- | ---------------------- | ----------------------------- |
-| `A`/`ALIAS` | `@`           | Vercel apex target     | Marketing site (apex)         |
-| `CNAME` | `www`             | `cname.vercel-dns.com` | Marketing site                |
-| `CNAME` | `app`             | `cname.vercel-dns.com` | Admin dashboard               |
-| `CNAME` | `*`               | `cname.vercel-dns.com` | All school subdomains         |
-
-(Exact target values are shown by Vercel when you add each domain. On a VPS
-instead of Vercel, point these records at your server's IP and run the app
-behind a reverse proxy with a wildcard TLS certificate, e.g. Caddy or
-nginx + a wildcard Let's Encrypt cert.)
-
-Once DNS resolves, a school with subdomain `kingston-college` is live at
-`https://kingston-college.anchorpointja.com` — no per-school DNS needed.
-
----
-
-## 4. Connecting a school's custom domain (Premium plan)
-
-Two sides have to agree: DNS (the school) and the platform record (you).
-
-**The school** adds one record at *their* domain registrar:
-
-| Type    | Name  | Value                  |
-| ------- | ----- | ---------------------- |
-| `CNAME` | `www` | `cname.vercel-dns.com` |
-
-(For an apex like `school.edu.jm` with no `www`, use an `A`/`ALIAS` record to
-the platform's apex target instead.)
-
-**You** then:
-
-1. Add the domain (e.g. `www.school.edu.jm`) to the Vercel project's Domains so
-   Vercel issues an SSL certificate for it.
-2. In the admin dashboard → **Settings → Web address & plan** (super-admin):
-   set the school's **Plan = Premium** and enter the **Custom domain**
-   (`www.school.edu.jm`). The value is normalised and stored on `School.customDomain`.
-
-The middleware matches the incoming `Host` against `School.customDomain` (it
-tries both the `www.` and apex variants) and renders that school's site.
-
----
-
-## 5. SQLite → Postgres for production
-
-SQLite is used locally so the app runs with zero services. For production:
-
-1. In `prisma/schema.prisma` change the datasource:
-
-   ```prisma
-   datasource db {
-     provider = "postgresql"
-     url      = env("DATABASE_URL")
-   }
-   ```
-
-2. Set `DATABASE_URL` to your Postgres connection string (Vercel Postgres,
-   Neon, Supabase, RDS, etc.).
-3. Create the schema and (optionally) seed:
+1. Create a free **MongoDB Atlas** cluster (Atlas clusters are replica sets,
+   which Prisma's MongoDB connector requires).
+2. Create a database user and get the `mongodb+srv://…/schoolhub` connection
+   string.
+3. Allow network access from your environment (for Accelerate, allow Prisma's
+   egress or `0.0.0.0/0` while testing).
+4. Create the collections + indexes and seed:
 
    ```bash
-   npx prisma migrate deploy      # or: npx prisma db push
-   npm run db:seed                # optional sample data
+   DATABASE_URL="mongodb+srv://USER:PASS@cluster.mongodb.net/schoolhub" \
+     npm run db:push      # creates indexes/collections from prisma/schema.prisma
+   DATABASE_URL="mongodb+srv://…/schoolhub" npm run db:seed   # optional sample data
    ```
 
-The "enum-like" string fields (`plan`, `role`, calendar `category`) are
-validated in the app layer (`lib/constants.ts`) and work identically on
-Postgres. You may optionally promote them to native Postgres enums later.
+> The model uses `relationMode = prisma` (implicit for MongoDB): referential
+> actions like `onDelete: Cascade` are enforced by Prisma in the app, not the DB.
 
 ---
 
-## 6. Where billing would plug in
+## 3. Prisma Accelerate (required for Cloudflare Workers)
 
-Billing is deferred. When you add it (e.g. Stripe):
+Cloudflare Workers can't use Prisma's MongoDB engine directly (there is no
+MongoDB driver adapter for the Workers runtime), so Workers talk to MongoDB
+through **Prisma Accelerate**, an HTTP query proxy.
 
-- Create a `Subscription` model linked to `School`, and gate `plan = PREMIUM`
-  (and therefore custom-domain support) on an active subscription.
-- Add a Stripe Checkout flow from the marketing **/pricing** page and a webhook
-  route under `app/api/` to keep subscription status in sync.
-- The plan metadata in `lib/constants.ts` (`PLAN_INFO`) already holds prices.
+1. In the [Prisma Data Platform](https://console.prisma.io), enable Accelerate
+   for a project and point it at your Atlas `mongodb+srv://…` connection string.
+2. Copy the generated `prisma://accelerate.prisma-data.net/?api_key=…` URL.
+3. Set it as the Worker's `DATABASE_URL` secret (§4). `lib/db.ts` automatically
+   applies the Accelerate extension whenever `DATABASE_URL` starts with
+   `prisma://`, and uses a direct connection otherwise.
+
+> Vercel/Node hosts can skip Accelerate and use the direct `mongodb+srv://…` URL.
 
 ---
 
-## 7. Security checklist before going live
+## 4. Cloudflare Workers — deploy
+
+### Option A: from your machine (Wrangler CLI)
+
+```bash
+npx wrangler login
+# set secrets (not stored in wrangler.toml):
+npx wrangler secret put DATABASE_URL      # the prisma://… Accelerate URL
+npx wrangler secret put AUTH_SECRET
+# build + deploy (NEXT_PUBLIC_ROOT_DOMAIN must be set in the build env):
+NEXT_PUBLIC_ROOT_DOMAIN=schoolhubja.com npm run cf:deploy
+```
+
+`npm run cf:preview` builds and runs the Worker locally in workerd.
+
+### Option B: Cloudflare Workers Builds (Git integration) — fixes the PR's CI check
+
+The repo's existing "Workers Builds: business-tracker" check builds the **repo
+root**, which has no Worker — so it fails. Point it at this app:
+
+In the Cloudflare dashboard → Workers & Pages → *business-tracker* → Settings →
+**Builds**:
+
+| Setting              | Value                                  |
+| -------------------- | -------------------------------------- |
+| Root directory       | `schoolhub`                            |
+| Build command        | `npm run cf:build`                     |
+| Deploy command       | `npx opennextjs-cloudflare deploy`     |
+| Build variable       | `NEXT_PUBLIC_ROOT_DOMAIN = schoolhubja.com` (or `anchorpointja.com` for dev) |
+
+Then add the runtime secrets (`DATABASE_URL`, `AUTH_SECRET`) under the Worker's
+Settings → Variables and Secrets. After saving, re-run the build — it will build
+this app instead of failing on the repo root.
+
+> `wrangler.toml` sets the Worker `name = "business-tracker"` to match that
+> service. Rename it (and the service) if you'd prefer a dedicated `schoolhub`
+> Worker.
+
+---
+
+## 5. DNS & domains
+
+The platform needs the apex, `www`, the `app` admin subdomain, and a **wildcard**
+for school subdomains, all routed to the Worker.
+
+1. Add the domain to Cloudflare (proxied / orange-cloud).
+2. **Custom Domains** (Worker → Settings → Domains & Routes → Add): add
+   `anchorpointja.com`, `www.anchorpointja.com`, and `app.anchorpointja.com`.
+   Cloudflare provisions DNS + TLS for each automatically.
+3. **Wildcard subdomains:** add a proxied wildcard DNS record (e.g. `CNAME *`
+   → the zone apex, proxied) and a Worker **Route** `*.anchorpointja.com/*`
+   bound to the Worker. Cloudflare's Universal SSL covers `*.anchorpointja.com`
+   (one subdomain level), so `kingston-college.anchorpointja.com` gets HTTPS.
+4. For **production**, repeat for `schoolhubja.com` and set the build variable
+   `NEXT_PUBLIC_ROOT_DOMAIN=schoolhubja.com`.
+
+Once routed, a school with subdomain `kingston-college` is live at
+`https://kingston-college.<root-domain>` with no per-school DNS.
+
+### School custom domains (Premium plan)
+
+1. The school points their domain at the Worker — simplest is to add their
+   hostname (e.g. `www.school.edu.jm`) as a **Custom Domain** on the Worker
+   (Cloudflare issues the cert), or a Route if the zone is on Cloudflare.
+2. In the admin dashboard → Settings → *Web address & plan* (super-admin):
+   set **Plan = Premium** and enter the **Custom domain**. The middleware matches
+   the incoming `Host` against `School.customDomain` (both `www.` and apex
+   variants) and serves that school's site.
+
+---
+
+## 6. Local development
+
+```bash
+cd schoolhub
+cp .env.example .env            # set AUTH_SECRET etc.
+
+# Option 1: an ephemeral local MongoDB replica set (downloads mongod once):
+npm run db:local                # leave running; prints the DATABASE_URL to use
+# Option 2: point DATABASE_URL at a MongoDB Atlas cluster.
+
+npm run db:reset                # push schema + seed sample data
+npm run dev                     # http://localhost:3000
+```
+
+Visit the marketing site at `localhost:3000`, a school at
+`kingston-college.localhost:3000`, and the dashboard at `app.localhost:3000`.
+
+---
+
+## 7. Where billing would plug in
+
+Billing is deferred. When adding it (e.g. Stripe): create a `Subscription`
+collection linked to `School`, gate `plan = PREMIUM` (and custom-domain support)
+on an active subscription, add Stripe Checkout from `/pricing`, and a webhook
+under `app/api/`. Plan prices already live in `lib/constants.ts` (`PLAN_INFO`).
+
+---
+
+## 8. Security checklist before going live
 
 - [ ] Set a strong, unique `AUTH_SECRET` (rotating it logs everyone out).
 - [ ] Change `SUPERADMIN_EMAIL` / `SUPERADMIN_PASSWORD` and re-seed, or update
       the super-admin password in the database.
+- [ ] Store `DATABASE_URL` / `AUTH_SECRET` as Worker **secrets**, never in
+      `wrangler.toml`.
 - [ ] **Sanitize school-authored HTML.** The About and Admissions fields render
       via `dangerouslySetInnerHTML` so school admins can use basic formatting.
       Since admins edit only their own tenant this is low-risk, but for defence
       in depth, sanitize this HTML on save (e.g. `sanitize-html` / `DOMPurify`)
       in the settings/admissions server actions before production.
-- [ ] Serve everything over HTTPS (automatic on Vercel).
+- [ ] Lock Atlas network access down from `0.0.0.0/0` once Accelerate egress is
+      confirmed.
 
-## 8. Note on the existing AnchorPoint Business Tracker page
+---
+
+## 9. Note on the existing AnchorPoint Business Tracker page
 
 anchorpointja.com previously served a static download page for the Business
 Tracker desktop app. That page is preserved in this app at **`/download`**

@@ -1790,7 +1790,8 @@ class OwnerAssignmentModal(ctk.CTkToplevel):
 
 class UpdateBanner(ctk.CTkFrame):
     """Yellow strip shown above the body when a newer release is on GitHub.
-    Click 'Download' to open the release page in the default browser.
+    'Download' goes straight to the right .zip for this OS; 'View page' opens
+    the branded download site (with install instructions).
     """
 
     def __init__(self, master):
@@ -1813,7 +1814,13 @@ class UpdateBanner(ctk.CTkFrame):
         ctk.CTkButton(
             self, text="Download", width=110, height=26,
             fg_color="white", text_color="#8a6d00",
-            hover_color="#dddddd", command=self._open,
+            hover_color="#dddddd", command=self._download,
+        ).pack(side="right", padx=4)
+
+        ctk.CTkButton(
+            self, text="View page", width=84, height=26,
+            fg_color="transparent", text_color="white", hover_color="#705800",
+            command=self._open_site,
         ).pack(side="right", padx=4)
 
         self.hide()  # start hidden
@@ -1831,9 +1838,14 @@ class UpdateBanner(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _open(self):
+    def _download(self):
+        # Straight to the correct platform .zip so the browser starts the
+        # download immediately (falls back to the branded site / release page).
         if self._info:
-            webbrowser.open(self._info.html_url)
+            webbrowser.open(self._info.download_url())
+
+    def _open_site(self):
+        webbrowser.open(updater.DOWNLOAD_SITE)
 
 
 class App(ctk.CTk):

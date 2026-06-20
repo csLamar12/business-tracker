@@ -7,9 +7,10 @@ The check is best-effort: any network/HTTP error is swallowed and treated as
 
 import json
 import re
+import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from version import __version__
 
@@ -22,6 +23,10 @@ GITHUB_REPO = "csLamar12/business-tracker"
 # 'repo' scope. Leave None for public repos.
 GITHUB_TOKEN = None
 
+# Branded download page (OS-detecting). Used as a fallback if we can't resolve a
+# direct platform asset, and as the canonical place to send users.
+DOWNLOAD_SITE = "https://tracker.anchorpointja.com"
+
 _API = "https://api.github.com/repos/{repo}/releases/latest"
 
 
@@ -32,10 +37,23 @@ class UpdateInfo:
     html_url: str  # release page (browser-friendly)
     name: str
     notes: str
+    assets: dict = field(default_factory=dict)  # {asset_name: browser_download_url}
 
     @property
     def newer(self) -> bool:
         return _is_newer(self.latest, self.current)
+
+    def download_url(self) -> str:
+        """Best download URL for THIS machine: the direct platform .zip so the
+        click goes straight to a download. Falls back to the branded site, then
+        the GitHub release page."""
+        plat = {"darwin": "mac", "win32": "windows"}.get(sys.platform)
+        if plat:
+            for name, url in self.assets.items():
+                n = (name or "").lower()
+                if plat in n and n.endswith(".zip") and url:
+                    return url
+        return DOWNLOAD_SITE or self.html_url
 
 
 def _normalize(v: str) -> tuple:
@@ -84,10 +102,16 @@ def check(timeout: float = 5.0) -> UpdateInfo | None:
     tag = (data.get("tag_name") or "").strip()
     if not tag:
         return None
+    assets = {
+        a.get("name"): a.get("browser_download_url")
+        for a in (data.get("assets") or [])
+        if a.get("name") and a.get("browser_download_url")
+    }
     return UpdateInfo(
         current=__version__,
         latest=tag,
         html_url=data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases",
         name=data.get("name") or tag,
         notes=(data.get("body") or "")[:500],
+        assets=assets,
     )

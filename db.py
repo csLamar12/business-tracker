@@ -1,6 +1,9 @@
 import queue
+import re
+import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import libsql
@@ -252,11 +255,55 @@ class Row:
         return list(self._d.keys())
 
 
+# ---------- Read path ----------
+#
+# libsql's single connection + global _lock serializes EVERYTHING — reads,
+# writes, AND the ~1s network sync(). So a UI read issued right after a save
+# (which fires schedule_sync()) blocks behind the sync thread holding _lock for
+# the whole network round-trip. That's the "app lags on every save" symptom.
+#
+# Fix: reads go to a SEPARATE, read-only plain-sqlite3 connection against the
+# same replica.db file (WAL mode), which never touches _lock. WAL gives us a
+# consistent last-committed snapshot without blocking the writer/sync. The
+# connection is thread-local because writer-thread on_done callbacks also read.
+_reader_local = threading.local()
+
+
+def _get_reader():
+    conn = getattr(_reader_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(
+            f"file:{REPLICA_PATH}?mode=ro", uri=True,
+            check_same_thread=False, timeout=5.0,
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA query_only = ON")
+        except sqlite3.Error:
+            pass
+        _reader_local.conn = conn
+    return conn
+
+
 def _query(sql, params=()):
-    with _lock:
-        cur = get_connection().execute(sql, params)
-        cols = [d[0] for d in cur.description] if cur.description else []
-        return [Row(r, cols) for r in cur.fetchall()]
+    """Read via the lock-free thread-local sqlite3 reader. Falls back to the
+    libsql connection on cold start (replica.db not yet materialized) or if the
+    reader hits a transient error. Returns sqlite3.Row / Row objects — both
+    support r["col"] and r.keys(), which is all callers rely on."""
+    try:
+        cur = _get_reader().execute(sql, params)
+        return cur.fetchall()
+    except sqlite3.Error:
+        # Reset a possibly-broken reader so the next call reopens it.
+        try:
+            getattr(_reader_local, "conn", None) and _reader_local.conn.close()
+        except sqlite3.Error:
+            pass
+        _reader_local.conn = None
+        with _lock:
+            cur = get_connection().execute(sql, params)
+            cols = [d[0] for d in cur.description] if cur.description else []
+            return [Row(r, cols) for r in cur.fetchall()]
 
 
 def _query_one(sql, params=()):
@@ -377,6 +424,7 @@ CREATE TABLE IF NOT EXISTS businesses (
     parent_id INTEGER REFERENCES businesses(id) ON DELETE CASCADE,
     phase TEXT DEFAULT 'Ideation',
     phase_notes TEXT DEFAULT '',
+    owner TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -418,7 +466,50 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE TABLE IF NOT EXISTS profiles (
     name TEXT PRIMARY KEY,
+    email TEXT DEFAULT '',
+    last_seen TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS business_members (
+    business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+    profile TEXT NOT NULL,
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (business_id, profile)
+);
+
+CREATE TABLE IF NOT EXISTS business_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+    inviter TEXT NOT NULL,
+    invitee TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT DEFAULT '',
+    business_id INTEGER,
+    created_by TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    seen INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unseen
+    ON notifications(recipient, seen);
+
+CREATE TABLE IF NOT EXISTS mention_state (
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    notified_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_type, entity_id, field, profile)
 );
 """
 
@@ -457,33 +548,109 @@ def init_db():
                 )
             except Exception:
                 pass
+        # Collaboration / privacy columns (mentions, presence, ownership).
+        for ddl in (
+            "ALTER TABLE profiles ADD COLUMN email TEXT DEFAULT ''",
+            "ALTER TABLE profiles ADD COLUMN last_seen TEXT DEFAULT ''",
+            "ALTER TABLE businesses ADD COLUMN owner TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
 
 
 # ---------- Profiles ----------
 
 def list_profiles():
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM profiles ORDER BY name").fetchall()
+    return _query("SELECT * FROM profiles ORDER BY name")
 
 
-def add_profile(name):
+def add_profile(name, email=""):
     name = name.strip()
     if not name:
         raise ValueError("profile name required")
+    email = (email or "").strip()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO profiles (name) VALUES (?) "
+            "INSERT INTO profiles (name, email) VALUES (?, ?) "
             "ON CONFLICT(name) DO NOTHING",
-            (name,),
+            (name, email),
         )
+        # Set the email on first registration even if the row already existed
+        # but had no email (e.g. profile created on another machine).
+        if email:
+            conn.execute(
+                "UPDATE profiles SET email = ? WHERE name = ? AND (email IS NULL OR email = '')",
+                (email, name),
+            )
+
+
+def get_profile(name):
+    return _query_one("SELECT * FROM profiles WHERE name = ?", (name,))
+
+
+def list_profiles_full():
+    """Profiles with email + presence, for pickers and online/offline dots."""
+    return _query(
+        "SELECT name, email, last_seen, created_at FROM profiles ORDER BY name"
+    )
+
+
+def set_profile_email(name, email):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE profiles SET email = ? WHERE name = ?",
+            ((email or "").strip(), name),
+        )
+
+
+def get_profile_email(name):
+    row = _query_one("SELECT email FROM profiles WHERE name = ?", (name,))
+    return (row["email"] if row else "") or ""
+
+
+# ---------- Presence ----------
+
+def _utcnow_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def touch_presence(name):
+    """Heartbeat: stamp the active profile's last_seen. Commits locally but
+    deliberately does NOT schedule_sync() — otherwise a heartbeat would wake the
+    sync loop, which would heartbeat again, in a tight storm. Presence rides the
+    next periodic sync instead. Safe to call from the sync thread."""
+    if not name:
+        return
+    with _lock:
+        conn = get_connection()
+        conn.execute(
+            "UPDATE profiles SET last_seen = ? WHERE name = ?",
+            (_utcnow_iso(), name),
+        )
+        conn.commit()
+
+
+def is_online(last_seen_iso, window_seconds=45):
+    """A profile is online if it heartbeated within `window_seconds`
+    (> 4x the 10s sync interval, so one slow/missed sync doesn't flap)."""
+    if not last_seen_iso:
+        return False
+    try:
+        ts = datetime.strptime(last_seen_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except (ValueError, TypeError):
+        return False
+    return (datetime.now(timezone.utc) - ts).total_seconds() <= window_seconds
 
 
 # ---------- Settings / FX ----------
 
 def _get_setting(key, default):
-    with get_conn() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+    row = _query_one("SELECT value FROM settings WHERE key = ?", (key,))
+    return row["value"] if row else default
 
 
 def _set_setting(key, value):
@@ -528,13 +695,119 @@ def convert(amount, from_curr, to_curr, rate=None):
 
 # ---------- Businesses ----------
 
-def add_business(name, parent_id=None):
+def add_business(name, parent_id=None, owner=""):
+    # Only top-level businesses carry an owner; subsidiaries inherit access
+    # from their root (they're only reachable through a visible parent).
+    owner = (owner or "") if parent_id is None else ""
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO businesses (name, parent_id) VALUES (?, ?)",
-            (name, parent_id),
+            "INSERT INTO businesses (name, parent_id, owner) VALUES (?, ?, ?)",
+            (name, parent_id, owner),
         )
         return cur.lastrowid
+
+
+# ---------- Ownership / access / sharing ----------
+
+def root_business_id(business_id):
+    """Walk parent_id up to the top-level business."""
+    seen = set()
+    bid = business_id
+    while bid is not None and bid not in seen:
+        seen.add(bid)
+        row = _query_one("SELECT parent_id FROM businesses WHERE id = ?", (bid,))
+        if row is None or row["parent_id"] is None:
+            return bid
+        bid = row["parent_id"]
+    return bid
+
+
+def get_owner(business_id):
+    row = _query_one(
+        "SELECT owner FROM businesses WHERE id = ?", (root_business_id(business_id),)
+    )
+    return (row["owner"] if row else "") or ""
+
+
+def set_owner(business_id, owner):
+    root = root_business_id(business_id)
+    with get_conn() as conn:
+        conn.execute("UPDATE businesses SET owner = ? WHERE id = ?", (owner, root))
+
+
+def list_unowned_top_level():
+    return _query(
+        "SELECT * FROM businesses WHERE parent_id IS NULL "
+        "AND (owner = '' OR owner IS NULL) ORDER BY name"
+    )
+
+
+def add_member(business_id, profile):
+    root = root_business_id(business_id)
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO business_members (business_id, profile) VALUES (?, ?) "
+            "ON CONFLICT(business_id, profile) DO NOTHING",
+            (root, profile),
+        )
+
+
+def remove_member(business_id, profile):
+    root = root_business_id(business_id)
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM business_members WHERE business_id = ? AND profile = ?",
+            (root, profile),
+        )
+
+
+def list_members(business_id):
+    """Profiles with access to a business (owner + accepted members), at root."""
+    root = root_business_id(business_id)
+    owner = get_owner(root)
+    members = [
+        r["profile"]
+        for r in _query(
+            "SELECT profile FROM business_members WHERE business_id = ?", (root,)
+        )
+    ]
+    out = []
+    if owner:
+        out.append(owner)
+    for m in members:
+        if m not in out:
+            out.append(m)
+    return out
+
+
+def has_access(business_id, profile):
+    root = root_business_id(business_id)
+    row = _query_one("SELECT owner FROM businesses WHERE id = ?", (root,))
+    if row is None:
+        return False
+    owner = (row["owner"] or "")
+    if owner == "" or owner == profile:
+        # Unowned/legacy businesses are visible to everyone; owner always has access.
+        return True
+    member = _query_one(
+        "SELECT 1 FROM business_members WHERE business_id = ? AND profile = ?",
+        (root, profile),
+    )
+    return member is not None
+
+
+def list_top_level_for(profile):
+    """Top-level businesses the profile can see: ones they own, ones they're a
+    member of, OR legacy unowned ones (owner='' ⇒ visible to all). The legacy
+    rule is the migration-safety net so nobody loses data the instant they
+    update, before the one-time owner-assignment screen runs."""
+    return _query(
+        "SELECT * FROM businesses WHERE parent_id IS NULL AND ("
+        "  owner = '' OR owner IS NULL OR owner = ? "
+        "  OR id IN (SELECT business_id FROM business_members WHERE profile = ?)"
+        ") ORDER BY name",
+        (profile, profile),
+    )
 
 
 def rename_business(business_id, name):
@@ -548,25 +821,19 @@ def delete_business(business_id):
 
 
 def list_top_level():
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM businesses WHERE parent_id IS NULL ORDER BY name"
-        ).fetchall()
+    return _query("SELECT * FROM businesses WHERE parent_id IS NULL ORDER BY name")
 
 
 def list_subsidiaries(parent_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM businesses WHERE parent_id = ? ORDER BY name",
-            (parent_id,),
-        ).fetchall()
+    # No profile filter: if you can see the parent (root), you inherit all subs.
+    return _query(
+        "SELECT * FROM businesses WHERE parent_id = ? ORDER BY name",
+        (parent_id,),
+    )
 
 
 def get_business(business_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM businesses WHERE id = ?", (business_id,)
-        ).fetchone()
+    return _query_one("SELECT * FROM businesses WHERE id = ?", (business_id,))
 
 
 def update_phase(business_id, phase, notes):
@@ -583,19 +850,19 @@ def add_income(business_id, date, source, amount, currency, notes, created_by=""
     if fx_rate is None:
         fx_rate = get_fx_rate()
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO income (business_id, date, source, amount, currency, notes, created_by, fx_rate) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (business_id, date, source, amount, currency, notes, created_by or "", fx_rate),
         )
+        return cur.lastrowid
 
 
 def list_income(business_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM income WHERE business_id = ? ORDER BY date DESC, id DESC",
-            (business_id,),
-        ).fetchall()
+    return _query(
+        "SELECT * FROM income WHERE business_id = ? ORDER BY date DESC, id DESC",
+        (business_id,),
+    )
 
 
 def delete_income(income_id):
@@ -630,19 +897,19 @@ def add_expense(business_id, date, category, amount, currency, notes, created_by
     if fx_rate is None:
         fx_rate = get_fx_rate()
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO expenses (business_id, date, category, amount, currency, notes, created_by, fx_rate) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (business_id, date, category, amount, currency, notes, created_by or "", fx_rate),
         )
+        return cur.lastrowid
 
 
 def list_expenses(business_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM expenses WHERE business_id = ? ORDER BY date DESC, id DESC",
-            (business_id,),
-        ).fetchall()
+    return _query(
+        "SELECT * FROM expenses WHERE business_id = ? ORDER BY date DESC, id DESC",
+        (business_id,),
+    )
 
 
 def delete_expense(expense_id):
@@ -689,19 +956,19 @@ def total_expenses_with_subs(business_id, display_currency=None):
 
 def add_plan(business_id, title, description, target_date, status, created_by=""):
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO plans (business_id, title, description, target_date, status, created_by) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (business_id, title, description, target_date, status, created_by or ""),
         )
+        return cur.lastrowid
 
 
 def list_plans(business_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM plans WHERE business_id = ? ORDER BY id DESC",
-            (business_id,),
-        ).fetchall()
+    return _query(
+        "SELECT * FROM plans WHERE business_id = ? ORDER BY id DESC",
+        (business_id,),
+    )
 
 
 def update_plan_status(plan_id, status):
@@ -722,3 +989,206 @@ def update_plan(plan_id, field, value):
 def delete_plan(plan_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM plans WHERE id = ?", (plan_id,))
+
+
+# ---------- Invitations ----------
+
+def create_invite(business_id, inviter, invitee):
+    """Owner invites a profile to a (root) business. Refuses a duplicate pending
+    invite and no-ops if the invitee already has access. Returns the invite id,
+    or None if nothing was created."""
+    root = root_business_id(business_id)
+    if not invitee or invitee == inviter:
+        return None
+    if has_access(root, invitee):
+        return None
+    existing = _query_one(
+        "SELECT id FROM business_invites WHERE business_id = ? AND invitee = ? "
+        "AND status = 'pending'",
+        (root, invitee),
+    )
+    if existing is not None:
+        return existing["id"]
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO business_invites (business_id, inviter, invitee) "
+            "VALUES (?, ?, ?)",
+            (root, inviter, invitee),
+        )
+        return cur.lastrowid
+
+
+def get_invite(invite_id):
+    return _query_one("SELECT * FROM business_invites WHERE id = ?", (invite_id,))
+
+
+def list_incoming_invites(profile):
+    return _query(
+        "SELECT bi.*, b.name AS business_name FROM business_invites bi "
+        "JOIN businesses b ON b.id = bi.business_id "
+        "WHERE bi.invitee = ? AND bi.status = 'pending' ORDER BY bi.id DESC",
+        (profile,),
+    )
+
+
+def list_outgoing_invites(profile):
+    return _query(
+        "SELECT bi.*, b.name AS business_name FROM business_invites bi "
+        "JOIN businesses b ON b.id = bi.business_id "
+        "WHERE bi.inviter = ? AND bi.status = 'pending' ORDER BY bi.id DESC",
+        (profile,),
+    )
+
+
+def list_pending_invitees(business_id):
+    root = root_business_id(business_id)
+    return [
+        r["invitee"]
+        for r in _query(
+            "SELECT invitee FROM business_invites WHERE business_id = ? "
+            "AND status = 'pending'",
+            (root,),
+        )
+    ]
+
+
+def accept_invite(invite_id):
+    """Invitee accepts: grant membership at root + notify the inviter. Returns
+    the invite Row (so the caller can refresh)."""
+    inv = get_invite(invite_id)
+    if inv is None or inv["status"] != "pending":
+        return inv
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE business_invites SET status = 'accepted', resolved_at = ? WHERE id = ?",
+            (_utcnow_iso(), invite_id),
+        )
+    add_member(inv["business_id"], inv["invitee"])
+    biz = get_business(inv["business_id"])
+    enqueue_notification(
+        recipient=inv["inviter"], kind="invite_accepted",
+        title=f"{inv['invitee']} accepted your invite",
+        body=f"{inv['invitee']} now has access to {biz['name'] if biz else 'a business'}.",
+        business_id=inv["business_id"], created_by=inv["invitee"],
+    )
+    return inv
+
+
+def decline_invite(invite_id):
+    inv = get_invite(invite_id)
+    if inv is None or inv["status"] != "pending":
+        return inv
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE business_invites SET status = 'declined', resolved_at = ? WHERE id = ?",
+            (_utcnow_iso(), invite_id),
+        )
+    return inv
+
+
+# ---------- Notifications (cross-machine toast delivery) ----------
+
+def enqueue_notification(recipient, kind, title, body="", business_id=None, created_by=""):
+    if not recipient:
+        return None
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO notifications (recipient, kind, title, body, business_id, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (recipient, kind, title, body or "", business_id, created_by or ""),
+        )
+        return cur.lastrowid
+
+
+def list_unseen_notifications(profile):
+    if not profile:
+        return []
+    return _query(
+        "SELECT * FROM notifications WHERE recipient = ? AND seen = 0 ORDER BY id",
+        (profile,),
+    )
+
+
+def list_recent_notifications(profile, limit=20):
+    if not profile:
+        return []
+    return _query(
+        "SELECT * FROM notifications WHERE recipient = ? ORDER BY id DESC LIMIT ?",
+        (profile, int(limit)),
+    )
+
+
+def mark_notifications_seen(ids):
+    ids = [int(i) for i in (ids or [])]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE notifications SET seen = 1 WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+
+
+# ---------- Mentions ----------
+
+MENTION_ENTITY_TYPES = {"income", "expense", "plan", "phase"}
+
+
+def parse_mentions(text, profile_names):
+    """Return the subset of profile_names that appear as @<name> in text.
+
+    Matches longest names first and *masks* each matched span so a shorter name
+    can't also match inside it — otherwise '@Anna Maria' would wrongly match
+    both 'Anna Maria' and 'Anna'. A trailing word boundary keeps '@Ann' from
+    matching profile 'Anna', and '@Anna' from matching 'Annabelle'."""
+    if not text:
+        return set()
+    found = set()
+    work = text
+    for name in sorted([n for n in profile_names if n], key=len, reverse=True):
+        # No word char before '@' so emails (notify@Lamar.com) aren't mentions.
+        pattern = r"(?<!\w)@" + re.escape(name) + r"(?!\w)"
+        matched = False
+        out = []
+        last = 0
+        for m in re.finditer(pattern, work, flags=re.IGNORECASE):
+            matched = True
+            out.append(work[last:m.start()])
+            out.append(" " * (m.end() - m.start()))  # blank the @name span
+            last = m.end()
+        if matched:
+            found.add(name)
+            out.append(work[last:])
+            work = "".join(out)
+    return found
+
+
+def newly_mentioned(entity_type, entity_id, field, text):
+    """Names @-mentioned in `text` that haven't already been notified for this
+    note location (so re-saving / editing the same note doesn't re-notify)."""
+    names = [p["name"] for p in list_profiles_full()]
+    present = parse_mentions(text, names)
+    if not present:
+        return []
+    already = {
+        r["profile"]
+        for r in _query(
+            "SELECT profile FROM mention_state WHERE entity_type = ? AND entity_id = ? AND field = ?",
+            (entity_type, entity_id, field),
+        )
+    }
+    return [n for n in present if n not in already]
+
+
+def record_mentions(entity_type, entity_id, field, names):
+    if not names:
+        return
+    with get_conn() as conn:
+        for name in names:
+            conn.execute(
+                "INSERT INTO mention_state (entity_type, entity_id, field, profile) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(entity_type, entity_id, field, profile) DO NOTHING",
+                (entity_type, entity_id, field, name),
+            )

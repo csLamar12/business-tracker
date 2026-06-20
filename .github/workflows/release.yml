@@ -38,16 +38,27 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Write Turso config from secrets
+      - name: Write config from secrets
         shell: bash
         env:
           TURSO_URL: ${{ secrets.TURSO_URL }}
           TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
         run: |
+          # Bake credentials into config.py so the shipped app works with zero
+          # user setup (same pattern already used for the Turso token). The SMTP
+          # values enable @-mention emails; if the SMTP_APP_PASSWORD secret is
+          # unset, email is simply skipped and in-app + desktop notifications
+          # still work.
           cat > config.py <<EOF
           import os
           TURSO_URL = os.environ.get("TURSO_URL", "${TURSO_URL}")
           TURSO_TOKEN = os.environ.get("TURSO_TOKEN", "${TURSO_TOKEN}")
+          SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+          SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+          SMTP_USER = os.environ.get("SMTP_USER", "${SMTP_USER:-anchorpointsystemsltd@gmail.com}")
+          SMTP_APP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "${SMTP_APP_PASSWORD}")
           EOF
 
       - name: Build (macOS)
@@ -74,6 +85,7 @@ jobs:
             --collect-all tkcalendar \
             --collect-all babel \
             --collect-all libsql \
+            --collect-all winotify \
             main.py
           cd dist
           7z a BusinessTracker-windows.zip BusinessTracker

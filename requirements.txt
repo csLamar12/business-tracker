@@ -1,3 +1,5 @@
 customtkinter>=5.2.0
 tkcalendar>=1.6.1
 libsql>=0.1.0
+# Windows-only desktop notifications. macOS uses osascript, Linux notify-send.
+winotify>=1.1.0; sys_platform == "win32"

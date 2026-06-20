@@ -8,9 +8,60 @@ import threading
 import webbrowser
 
 import db
+import notify
 import profile as user_profile
 import updater
+from mentions_ui import MentionAutocomplete
 from version import __version__
+
+
+# Profiles whose @-mention has a fresh notification fired on save. Used by the
+# add/edit pipelines; runs on the writer thread so the UI never blocks.
+def process_mentions(entity_type, entity_id, field, text, business_id, author):
+    """Detect newly-@-mentioned profiles in `text` and, for each, enqueue a
+    cross-machine notification + send an email. Dedupes via mention_state so
+    re-saving the same note doesn't re-notify. Safe to call off the UI thread."""
+    try:
+        new_names = db.newly_mentioned(entity_type, entity_id, field, text or "")
+    except Exception as e:
+        print(f"[mentions] detect failed: {e}")
+        return
+    if not new_names:
+        return
+    db.record_mentions(entity_type, entity_id, field, new_names)
+    biz = db.get_business(business_id) if business_id else None
+    bizname = biz["name"] if biz else "a business"
+    label = {"income": "income note", "expense": "expense note",
+             "plan": "plan", "phase": "phase notes"}.get(entity_type, entity_type)
+    for name in new_names:
+        if name == author:
+            continue  # don't notify yourself
+        try:
+            db.enqueue_notification(
+                recipient=name, kind="mention",
+                title=f"{author} mentioned you",
+                body=f"In {bizname} ({label}): {(text or '').strip()[:200]}",
+                business_id=business_id, created_by=author,
+            )
+        except Exception as e:
+            print(f"[mentions] enqueue failed: {e}")
+        email = db.get_profile_email(name)
+        if email:
+            notify.send_email(
+                email,
+                subject=f"[Business Tracker] {author} mentioned you in {bizname}",
+                body=(f"{author} mentioned you in {bizname} ({label}).\n\n"
+                      f"{(text or '').strip()}\n\n"
+                      f"— Open Business Tracker to view."),
+            )
+
+
+def mention_names():
+    """Profile names available to @-mention (best-effort; never raises)."""
+    try:
+        return [p["name"] for p in db.list_profiles_full()]
+    except Exception:
+        return []
 
 
 class _CalendarModal(ctk.CTkToplevel):
@@ -158,7 +209,8 @@ class BusinessForm(ctk.CTkToplevel):
         if not name:
             messagebox.showwarning("Missing name", "Please enter a name.", parent=self)
             return
-        db.add_business(name, self.parent_id)
+        owner = user_profile.get_active() or ""
+        db.add_business(name, self.parent_id, owner=owner)
         if self.on_save:
             self.on_save()
         self.destroy()
@@ -195,16 +247,20 @@ class ProfilePicker(ctk.CTkToplevel):
         # New-profile section
         new_row = ctk.CTkFrame(self)
         new_row.pack(fill="x", padx=20, pady=(0, 12))
-        ctk.CTkLabel(new_row, text="New profile name:").pack(
+        ctk.CTkLabel(new_row, text="New profile:").pack(
             anchor="w", padx=12, pady=(8, 0)
         )
-        entry_row = ctk.CTkFrame(new_row, fg_color="transparent")
-        entry_row.pack(fill="x", padx=8, pady=8)
-        self.new_entry = ctk.CTkEntry(entry_row, placeholder_text="e.g. Lamar")
-        self.new_entry.pack(side="left", fill="x", expand=True, padx=4)
-        ctk.CTkButton(entry_row, text="Create", width=80,
+        self.new_entry = ctk.CTkEntry(new_row, placeholder_text="Name (e.g. Lamar)")
+        self.new_entry.pack(fill="x", padx=12, pady=(6, 0))
+        email_row = ctk.CTkFrame(new_row, fg_color="transparent")
+        email_row.pack(fill="x", padx=8, pady=8)
+        self.new_email = ctk.CTkEntry(
+            email_row, placeholder_text="Email (for @-mention alerts)")
+        self.new_email.pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(email_row, text="Create", width=80,
                       command=self._create).pack(side="right", padx=4)
-        self.new_entry.bind("<Return>", lambda _e: self._create())
+        self.new_entry.bind("<Return>", lambda _e: self.new_email.focus())
+        self.new_email.bind("<Return>", lambda _e: self._create())
 
         if allow_cancel:
             ctk.CTkButton(self, text="Cancel", fg_color="gray30",
@@ -217,7 +273,7 @@ class ProfilePicker(ctk.CTkToplevel):
         for w in self.list_frame.winfo_children():
             w.destroy()
         try:
-            profiles = db.list_profiles()
+            profiles = db.list_profiles_full()
         except Exception as e:
             ctk.CTkLabel(self.list_frame,
                          text=f"Couldn't load profiles: {e}",
@@ -231,11 +287,15 @@ class ProfilePicker(ctk.CTkToplevel):
         for p in profiles:
             name = p["name"]
             color = user_profile.color_for(name)
+            online = db.is_online(p["last_seen"])
             row = ctk.CTkFrame(self.list_frame, fg_color="transparent")
             row.pack(fill="x", pady=3)
-            dot = ctk.CTkLabel(row, text="●", text_color=color,
-                               font=ctk.CTkFont(size=18))
-            dot.pack(side="left", padx=(8, 4))
+            # Presence dot (green online / gray offline) + identity color dot.
+            ctk.CTkLabel(row, text="●",
+                         text_color="#2e7d32" if online else "#555555",
+                         font=ctk.CTkFont(size=14)).pack(side="left", padx=(8, 0))
+            ctk.CTkLabel(row, text="●", text_color=color,
+                         font=ctk.CTkFont(size=18)).pack(side="left", padx=(2, 4))
             ctk.CTkButton(
                 row, text=name, anchor="w", height=34,
                 fg_color="transparent", hover_color="#1f6aa5",
@@ -247,8 +307,9 @@ class ProfilePicker(ctk.CTkToplevel):
         if not name:
             messagebox.showwarning("Missing name", "Enter a profile name.", parent=self)
             return
+        email = self.new_email.get().strip()
         try:
-            db.add_profile(name)
+            db.add_profile(name, email)
         except Exception as e:
             messagebox.showerror("Couldn't create", str(e), parent=self)
             return
@@ -258,6 +319,110 @@ class ProfilePicker(ctk.CTkToplevel):
         user_profile.set_active(name)
         self.on_pick(name)
         self.destroy()
+
+
+def send_invite(business_id, inviter, invitee):
+    """Create a pending invite + notify/email the invitee. Runs on the writer
+    thread (called inside submit_write). Returns nothing; best-effort."""
+    invite_id = db.create_invite(business_id, inviter, invitee)
+    if not invite_id:
+        return
+    biz = db.get_business(business_id)
+    bizname = biz["name"] if biz else "a business"
+    db.enqueue_notification(
+        recipient=invitee, kind="invite",
+        title=f"{inviter} invited you to {bizname}",
+        body=f'{inviter} shared "{bizname}" with you. Open the bell to Accept.',
+        business_id=business_id, created_by=inviter,
+    )
+    email = db.get_profile_email(invitee)
+    if email:
+        notify.send_email(
+            email,
+            subject=f"[Business Tracker] {inviter} shared {bizname} with you",
+            body=(f'{inviter} invited you to access "{bizname}" in Business '
+                  f"Tracker.\n\nOpen the app and click the bell icon to Accept."),
+        )
+
+
+class InvitePicker(ctk.CTkToplevel):
+    """Pick a profile to invite to a specific business (owner-initiated share)."""
+
+    def __init__(self, master, business_id, business_name):
+        super().__init__(master)
+        self.business_id = business_id
+        self.business_name = business_name
+        self.title(f"Share “{business_name}”")
+        self.geometry("400x460")
+        self.transient(master.winfo_toplevel())
+        self.grab_set()
+
+        ctk.CTkLabel(
+            self, text=f"Invite someone to “{business_name}”",
+            font=ctk.CTkFont(size=16, weight="bold"), wraplength=360, justify="left",
+        ).pack(pady=(20, 2), padx=20, anchor="w")
+        ctk.CTkLabel(
+            self, text="They'll get the same full access once they accept.",
+            text_color="gray60",
+        ).pack(padx=20, anchor="w")
+
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list_frame.pack(fill="both", expand=True, padx=20, pady=12)
+
+        ctk.CTkButton(self, text="Close", fg_color="gray30",
+                      command=self.destroy).pack(pady=(0, 12))
+
+        self._optimistic_pending = set()
+        self.update_idletasks()
+        self.lift()
+        self.focus_force()
+        self._refresh()
+
+    def _refresh(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        me = user_profile.get_active() or ""
+        members = set(db.list_members(self.business_id))
+        pending = set(db.list_pending_invitees(self.business_id)) | self._optimistic_pending
+        try:
+            profiles = db.list_profiles_full()
+        except Exception as e:
+            ctk.CTkLabel(self.list_frame, text=f"Couldn't load profiles: {e}",
+                         text_color="#ef5350").pack(padx=8, pady=8)
+            return
+        shown = 0
+        for p in profiles:
+            name = p["name"]
+            if name == me or name in members:
+                continue
+            shown += 1
+            online = db.is_online(p["last_seen"])
+            row = ctk.CTkFrame(self.list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text="●",
+                         text_color="#2e7d32" if online else "#555555",
+                         font=ctk.CTkFont(size=14)).pack(side="left", padx=(8, 2))
+            ctk.CTkLabel(row, text=name, anchor="w").pack(
+                side="left", fill="x", expand=True, padx=6)
+            if name in pending:
+                ctk.CTkLabel(row, text="Invited ⏳", text_color="gray60").pack(
+                    side="right", padx=8)
+            else:
+                ctk.CTkButton(
+                    row, text="Invite", width=72, height=28,
+                    command=lambda n=name: self._invite(n),
+                ).pack(side="right", padx=4)
+        if shown == 0:
+            ctk.CTkLabel(self.list_frame,
+                         text="Everyone already has access or is invited.",
+                         text_color="gray60").pack(padx=8, pady=12)
+
+    def _invite(self, invitee):
+        inviter = user_profile.get_active() or ""
+        bid = self.business_id
+        self._optimistic_pending.add(invitee)
+        db.submit_write(lambda: send_invite(bid, inviter, invitee))
+        self._refresh()
 
 
 class Sidebar(ctk.CTkFrame):
@@ -297,7 +462,8 @@ class Sidebar(ctk.CTkFrame):
         for w in self.scroll.winfo_children():
             w.destroy()
 
-        top = db.list_top_level()
+        active = user_profile.get_active() or ""
+        top = db.list_top_level_for(active)
         if not top:
             ctk.CTkLabel(
                 self.scroll,
@@ -341,6 +507,16 @@ class Sidebar(ctk.CTkFrame):
             )
             add_btn.pack(side="right", padx=(4, 0))
 
+            # Owner-only Share button — invite another profile to this business.
+            active = user_profile.get_active() or ""
+            owner = biz["owner"] if "owner" in biz.keys() else ""
+            if owner == active and owner != "":
+                ctk.CTkButton(
+                    row, text="⤷", width=28, height=32,
+                    fg_color="gray30", hover_color="#1f6aa5",
+                    command=lambda b=biz: InvitePicker(self, b["id"], b["name"]),
+                ).pack(side="right", padx=(4, 0))
+
     def _select(self, business_id):
         self.selected_id = business_id
         self.refresh()
@@ -357,13 +533,16 @@ class DataTable(ctk.CTkFrame):
     on_delete: callable(row_id)
     """
 
-    def __init__(self, master, columns, on_delete=None, editable=None, on_edit=None):
+    def __init__(self, master, columns, on_delete=None, editable=None, on_edit=None,
+                 mention_cols=None, get_mention_names=None):
         super().__init__(master, fg_color="transparent")
         self.columns = columns
         self.col_keys = [c[0] for c in columns]
         self.editable = editable or {}
         self.on_edit = on_edit
         self.on_delete = on_delete
+        self.mention_cols = set(mention_cols or ())
+        self.get_mention_names = get_mention_names
 
         style = ttk.Style()
         style.theme_use("default")
@@ -403,6 +582,9 @@ class DataTable(ctk.CTkFrame):
             self.tree.bind("<BackSpace>", self._handle_delete)
         if self.editable and self.on_edit:
             self.tree.bind("<Double-1>", self._on_double_click)
+
+    def is_editing(self):
+        return self._editor is not None
 
     def _handle_delete(self, _e):
         sel = self.tree.selection()
@@ -501,11 +683,19 @@ class DataTable(ctk.CTkFrame):
             editor.place(x=x, y=y, width=w, height=h)
             editor.focus_set()
             editor.select_range(0, "end")
+            # @-mention autocomplete on note/description columns. Attach BEFORE
+            # the commit bindings, and bind commits with add="+", so the popup's
+            # Return/Escape/FocusOut handlers run first and can consume the key
+            # (return "break") when the suggestion list is open.
+            if col_key in self.mention_cols and self.get_mention_names:
+                MentionAutocomplete(editor, self.get_mention_names)
             editor.bind("<Return>",
-                        lambda _e: self._commit(editor, row_id, col_key, kind))
+                        lambda _e: self._commit(editor, row_id, col_key, kind),
+                        add="+")
             editor.bind("<FocusOut>",
-                        lambda _e: self._commit(editor, row_id, col_key, kind))
-            editor.bind("<Escape>", lambda _e: self._cancel_edit())
+                        lambda _e: self._commit(editor, row_id, col_key, kind),
+                        add="+")
+            editor.bind("<Escape>", lambda _e: self._cancel_edit(), add="+")
 
         self._editor = editor
 
@@ -554,7 +744,8 @@ class IncomeTab(ctk.CTkFrame):
             row=1, column=3, padx=8, pady=(0, 8)
         )
 
-        self.notes_entry = self._labeled(form, "Notes", 4)
+        self.notes_entry = self._labeled(form, "Notes (@ to mention)", 4)
+        MentionAutocomplete(self.notes_entry._entry, mention_names)
 
         ctk.CTkButton(form, text="Add Income", command=self._add).grid(
             row=0, column=5, rowspan=2, padx=12, pady=8, sticky="ns"
@@ -582,6 +773,8 @@ class IncomeTab(ctk.CTkFrame):
                 "notes": {"type": "text"},
             },
             on_edit=self._edit,
+            mention_cols={"notes"},
+            get_mention_names=mention_names,
         )
         self.table.pack(fill="both", expand=True, padx=12, pady=12)
 
@@ -615,10 +808,11 @@ class IncomeTab(ctk.CTkFrame):
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
 
-        db.submit_write(
-            lambda: db.add_income(bid, date_val, source, amount, currency, notes, profile_name),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        def work():
+            new_id = db.add_income(bid, date_val, source, amount, currency, notes, profile_name)
+            process_mentions("income", new_id, "notes", notes, bid, profile_name)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def _delete(self, row_id):
         db.submit_write(
@@ -627,10 +821,15 @@ class IncomeTab(ctk.CTkFrame):
         )
 
     def _edit(self, row_id, field, value):
-        db.submit_write(
-            lambda: db.update_income(row_id, field, value),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        bid = self.business_id
+        author = user_profile.get_active() or ""
+
+        def work():
+            db.update_income(row_id, field, value)
+            if field == "notes":
+                process_mentions("income", row_id, "notes", value, bid, author)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def refresh(self):
         display = db.get_display_currency()
@@ -657,6 +856,26 @@ class IncomeTab(ctk.CTkFrame):
         self.total_label.configure(
             text=f"Total: {fmt_money(db.total_income(self.business_id, display), display)}"
         )
+        self._sig = self._signature()
+
+    def _signature(self):
+        display = db.get_display_currency()
+        rows = db.list_income(self.business_id)
+        return (display, db.get_fx_rate(), tuple(
+            (r["id"], r["date"], r["source"], r["amount"], r["currency"],
+             r["fx_rate"], r["notes"], r["created_by"]) for r in rows))
+
+    def live_refresh(self):
+        # Repaint on remote sync only when (a) no cell is being edited and
+        # (b) the data actually changed — otherwise we'd clear selection/scroll
+        # and flicker the table every sync tick.
+        if self.table.is_editing():
+            return
+        sig = self._signature()
+        if sig == getattr(self, "_sig", None):
+            return
+        self._sig = sig
+        self.refresh()
 
 
 class ExpenseTab(ctk.CTkFrame):
@@ -683,7 +902,8 @@ class ExpenseTab(ctk.CTkFrame):
             row=1, column=3, padx=8, pady=(0, 8)
         )
 
-        self.notes_entry = self._labeled(form, "Notes", 4)
+        self.notes_entry = self._labeled(form, "Notes (@ to mention)", 4)
+        MentionAutocomplete(self.notes_entry._entry, mention_names)
 
         ctk.CTkButton(form, text="Add Expense", command=self._add).grid(
             row=0, column=5, rowspan=2, padx=12, pady=8, sticky="ns"
@@ -711,6 +931,8 @@ class ExpenseTab(ctk.CTkFrame):
                 "notes": {"type": "text"},
             },
             on_edit=self._edit,
+            mention_cols={"notes"},
+            get_mention_names=mention_names,
         )
         self.table.pack(fill="both", expand=True, padx=12, pady=12)
 
@@ -743,10 +965,11 @@ class ExpenseTab(ctk.CTkFrame):
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
 
-        db.submit_write(
-            lambda: db.add_expense(bid, date_val, category, amount, currency, notes, profile_name),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        def work():
+            new_id = db.add_expense(bid, date_val, category, amount, currency, notes, profile_name)
+            process_mentions("expense", new_id, "notes", notes, bid, profile_name)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def _delete(self, row_id):
         db.submit_write(
@@ -755,10 +978,15 @@ class ExpenseTab(ctk.CTkFrame):
         )
 
     def _edit(self, row_id, field, value):
-        db.submit_write(
-            lambda: db.update_expense(row_id, field, value),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        bid = self.business_id
+        author = user_profile.get_active() or ""
+
+        def work():
+            db.update_expense(row_id, field, value)
+            if field == "notes":
+                process_mentions("expense", row_id, "notes", value, bid, author)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def refresh(self):
         display = db.get_display_currency()
@@ -785,6 +1013,23 @@ class ExpenseTab(ctk.CTkFrame):
         self.total_label.configure(
             text=f"Total: {fmt_money(db.total_expenses(self.business_id, display), display)}"
         )
+        self._sig = self._signature()
+
+    def _signature(self):
+        display = db.get_display_currency()
+        rows = db.list_expenses(self.business_id)
+        return (display, db.get_fx_rate(), tuple(
+            (r["id"], r["date"], r["category"], r["amount"], r["currency"],
+             r["fx_rate"], r["notes"], r["created_by"]) for r in rows))
+
+    def live_refresh(self):
+        if self.table.is_editing():
+            return
+        sig = self._signature()
+        if sig == getattr(self, "_sig", None):
+            return
+        self._sig = sig
+        self.refresh()
 
 
 class PlansTab(ctk.CTkFrame):
@@ -812,9 +1057,10 @@ class PlansTab(ctk.CTkFrame):
             row=1, column=2, padx=8, pady=(0, 8)
         )
 
-        ctk.CTkLabel(form, text="Description").grid(row=0, column=3, padx=8, pady=(8, 0), sticky="w")
+        ctk.CTkLabel(form, text="Description (@ to mention)").grid(row=0, column=3, padx=8, pady=(8, 0), sticky="w")
         self.desc_entry = ctk.CTkEntry(form, width=260)
         self.desc_entry.grid(row=1, column=3, padx=8, pady=(0, 8))
+        MentionAutocomplete(self.desc_entry._entry, mention_names)
 
         ctk.CTkButton(form, text="Add Plan", command=self._add).grid(
             row=0, column=4, rowspan=2, padx=12, pady=8, sticky="ns"
@@ -833,6 +1079,8 @@ class PlansTab(ctk.CTkFrame):
                 "description": {"type": "text"},
             },
             on_edit=self._edit,
+            mention_cols={"description"},
+            get_mention_names=mention_names,
         )
         self.table.pack(fill="both", expand=True, padx=12, pady=12)
 
@@ -852,10 +1100,11 @@ class PlansTab(ctk.CTkFrame):
         self.target_entry.set_date(date.today())
         self.desc_entry.delete(0, "end")
 
-        db.submit_write(
-            lambda: db.add_plan(bid, title, description, target_val, status, profile_name),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        def work():
+            new_id = db.add_plan(bid, title, description, target_val, status, profile_name)
+            process_mentions("plan", new_id, "description", description, bid, profile_name)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def _delete(self, row_id):
         db.submit_write(
@@ -864,10 +1113,15 @@ class PlansTab(ctk.CTkFrame):
         )
 
     def _edit(self, row_id, field, value):
-        db.submit_write(
-            lambda: db.update_plan(row_id, field, value),
-            on_done=lambda: self.after(0, self.refresh),
-        )
+        bid = self.business_id
+        author = user_profile.get_active() or ""
+
+        def work():
+            db.update_plan(row_id, field, value)
+            if field == "description":
+                process_mentions("plan", row_id, "description", value, bid, author)
+
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
 
     def refresh(self):
         rows = db.list_plans(self.business_id)
@@ -879,6 +1133,22 @@ class PlansTab(ctk.CTkFrame):
             ],
             raw_rows=rows,
         )
+        self._sig = self._signature()
+
+    def _signature(self):
+        rows = db.list_plans(self.business_id)
+        return tuple(
+            (r["id"], r["title"], r["target_date"], r["status"],
+             r["description"], r["created_by"]) for r in rows)
+
+    def live_refresh(self):
+        if self.table.is_editing():
+            return
+        sig = self._signature()
+        if sig == getattr(self, "_sig", None):
+            return
+        self._sig = sig
+        self.refresh()
 
 
 class PhaseTab(ctk.CTkFrame):
@@ -897,24 +1167,60 @@ class PhaseTab(ctk.CTkFrame):
             anchor="w", padx=20
         )
 
-        ctk.CTkLabel(self, text="Notes / what's happening now").pack(
+        ctk.CTkLabel(self, text="Notes / what's happening now  (type @ to mention)").pack(
             anchor="w", padx=20, pady=(20, 4)
         )
         self.notes = ctk.CTkTextbox(self, height=200)
         self.notes.pack(fill="both", expand=True, padx=20, pady=(0, 12))
-        self.notes.insert("1.0", biz["phase_notes"] or "")
+        self._saved_notes = biz["phase_notes"] or ""
+        self.notes.insert("1.0", self._saved_notes)
+        MentionAutocomplete(self.notes._textbox, mention_names, is_text=True)
 
         ctk.CTkButton(self, text="Save Phase", command=self._save).pack(
             anchor="e", padx=20, pady=(0, 20)
         )
 
     def _save(self):
-        db.update_phase(
-            self.business_id,
-            self.phase_var.get(),
-            self.notes.get("1.0", "end").strip(),
-        )
+        bid = self.business_id
+        phase = self.phase_var.get()
+        notes = self.notes.get("1.0", "end").strip()
+        author = user_profile.get_active() or ""
+        self._saved_notes = notes
+
+        def work():
+            db.update_phase(bid, phase, notes)
+            process_mentions("phase", bid, "phase_notes", notes, bid, author)
+
+        # Non-blocking save (matches the other tabs); confirm immediately.
+        db.submit_write(work)
         messagebox.showinfo("Saved", "Phase updated.")
+
+    def _is_dirty(self):
+        try:
+            return self.notes.get("1.0", "end").strip() != (self._saved_notes or "")
+        except Exception:
+            return False
+
+    def live_refresh(self):
+        # Never clobber the phase notes the user is editing: skip if the textbox
+        # has focus or has unsaved edits.
+        try:
+            focused = self.focus_get()
+        except Exception:
+            focused = None
+        if focused is self.notes or focused is getattr(self.notes, "_textbox", None):
+            return
+        if self._is_dirty():
+            return
+        biz = db.get_business(self.business_id)
+        if not biz:
+            return
+        remote_notes = biz["phase_notes"] or ""
+        if remote_notes != self._saved_notes:
+            self._saved_notes = remote_notes
+            self.notes.delete("1.0", "end")
+            self.notes.insert("1.0", remote_notes)
+        self.phase_var.set(biz["phase"] or db.PHASES[0])
 
 
 class OverviewTab(ctk.CTkFrame):
@@ -923,8 +1229,50 @@ class OverviewTab(ctk.CTkFrame):
         self.business_id = business_id
         self.on_rename = on_rename
         self.on_delete = on_delete
+        self._build()
+        self._sig = self._signature()
 
+    def refresh(self):
+        for w in self.winfo_children():
+            w.destroy()
+        self._build()
+        self._sig = self._signature()
+
+    def _signature(self):
+        biz = db.get_business(self.business_id)
+        if not biz:
+            return None
+        display = db.get_display_currency()
+        is_parent = not biz["parent_id"]
+        if is_parent:
+            inc = db.total_income_with_subs(self.business_id, display)
+            exp = db.total_expenses_with_subs(self.business_id, display)
+        else:
+            inc = db.total_income(self.business_id, display)
+            exp = db.total_expenses(self.business_id, display)
+        subs = tuple(
+            (s["id"], s["name"], s["phase"],
+             round(db.total_income(s["id"], display) - db.total_expenses(s["id"], display), 2))
+            for s in db.list_subsidiaries(self.business_id)
+        ) if is_parent else ()
+        owner = biz["owner"] if "owner" in biz.keys() else ""
+        return (biz["name"], biz["phase"], owner, display, db.get_fx_rate(),
+                round(inc, 2), round(exp, 2), subs)
+
+    def live_refresh(self):
+        # Overview has no inputs, so it's always safe to rebuild — but only do so
+        # when the underlying numbers/structure changed, to avoid flicker on
+        # every sync tick. This is what closes the live-sync gap.
+        sig = self._signature()
+        if sig == getattr(self, "_sig", None):
+            return
+        self.refresh()
+
+    def _build(self):
+        business_id = self.business_id
         biz = db.get_business(business_id)
+        if not biz:
+            return
         display = db.get_display_currency()
         is_parent = not biz["parent_id"]
 
@@ -951,8 +1299,17 @@ class OverviewTab(ctk.CTkFrame):
         ctk.CTkButton(header, text="Delete", width=80, fg_color="#a52a2a",
                       hover_color="#7a1f1f", command=self._delete).pack(side="right", padx=4)
 
+        # Owner-only Share button (invite a profile to this business).
+        active = user_profile.get_active() or ""
+        owner = db.get_owner(business_id)
+        if is_parent and owner == active and owner != "":
+            ctk.CTkButton(header, text="Share", width=80, fg_color="#1f6aa5",
+                          command=self._share).pack(side="right", padx=4)
+
         sub = "Subsidiary" if biz["parent_id"] else "Top-level Business"
-        ctk.CTkLabel(self, text=sub, text_color="gray60").pack(anchor="w", padx=20)
+        owner_txt = f"   ·   Owner: {owner}" if owner else ""
+        ctk.CTkLabel(self, text=sub + owner_txt, text_color="gray60").pack(
+            anchor="w", padx=20)
 
         ctk.CTkLabel(self, text=f"Phase: {biz['phase']}", font=ctk.CTkFont(size=14)).pack(
             anchor="w", padx=20, pady=(16, 0)
@@ -1024,17 +1381,26 @@ class OverviewTab(ctk.CTkFrame):
             db.delete_business(self.business_id)
             self.on_delete()
 
+    def _share(self):
+        biz = db.get_business(self.business_id)
+        if biz:
+            InvitePicker(self, self.business_id, biz["name"])
+
 
 class DetailPane(ctk.CTkFrame):
     def __init__(self, master, on_change):
         super().__init__(master, fg_color="transparent")
         self.on_change = on_change
         self.business_id = None
+        self.tabs = None
+        self._tab_widgets = {}
         self._show_empty()
 
     def _show_empty(self):
         for w in self.winfo_children():
             w.destroy()
+        self.tabs = None
+        self._tab_widgets = {}
         ctk.CTkLabel(
             self,
             text="Select a business from the sidebar\nor add a new one to get started.",
@@ -1054,25 +1420,52 @@ class DetailPane(ctk.CTkFrame):
 
         tabs = ctk.CTkTabview(self)
         tabs.pack(fill="both", expand=True, padx=8, pady=8)
+        self.tabs = tabs
 
         for name in ("Overview", "Income", "Expenses", "Plans", "Phase"):
             tabs.add(name)
 
-        OverviewTab(tabs.tab("Overview"), business_id,
-                    on_rename=self.on_change, on_delete=self.on_change).pack(fill="both", expand=True)
-        IncomeTab(tabs.tab("Income"), business_id).pack(fill="both", expand=True)
-        ExpenseTab(tabs.tab("Expenses"), business_id).pack(fill="both", expand=True)
-        PlansTab(tabs.tab("Plans"), business_id).pack(fill="both", expand=True)
-        PhaseTab(tabs.tab("Phase"), business_id).pack(fill="both", expand=True)
+        overview = OverviewTab(tabs.tab("Overview"), business_id,
+                               on_rename=self.on_change, on_delete=self.on_change)
+        overview.pack(fill="both", expand=True)
+        income = IncomeTab(tabs.tab("Income"), business_id)
+        income.pack(fill="both", expand=True)
+        expense = ExpenseTab(tabs.tab("Expenses"), business_id)
+        expense.pack(fill="both", expand=True)
+        plans = PlansTab(tabs.tab("Plans"), business_id)
+        plans.pack(fill="both", expand=True)
+        phase = PhaseTab(tabs.tab("Phase"), business_id)
+        phase.pack(fill="both", expand=True)
+        self._tab_widgets = {
+            "Overview": overview, "Income": income, "Expenses": expense,
+            "Plans": plans, "Phase": phase,
+        }
+
+    def live_refresh(self):
+        """Refresh read-only views on a remote sync without clobbering input.
+        Each tab's live_refresh() self-guards against open editors / dirty
+        fields. Overview always refreshes; the others skip while being edited."""
+        if not self.tabs or not self._tab_widgets:
+            return
+        for tab in self._tab_widgets.values():
+            fn = getattr(tab, "live_refresh", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception as e:
+                    print(f"[live_refresh] {e}")
 
 
 class TopBar(ctk.CTkFrame):
-    def __init__(self, master, on_switch_profile, on_check_updates, on_backup):
+    def __init__(self, master, on_switch_profile, on_check_updates, on_backup,
+                 on_open_notifications=None, on_edit_email=None):
         super().__init__(master, height=48, corner_radius=0, fg_color="#1f1f1f")
         self.pack_propagate(False)
         self.on_switch_profile = on_switch_profile
         self.on_check_updates = on_check_updates
         self.on_backup = on_backup
+        self.on_open_notifications = on_open_notifications
+        self.on_edit_email = on_edit_email
 
         ctk.CTkLabel(
             self, text="Business Tracker",
@@ -1098,10 +1491,24 @@ class TopBar(ctk.CTkFrame):
         )
         self.profile_btn.pack(side="right", padx=(8, 16))
 
+        # Notifications bell — count of unseen mentions/invites.
+        self.bell_btn = ctk.CTkButton(
+            self, text="🔔", width=44, height=30,
+            fg_color="transparent", hover_color="#333333",
+            command=(self.on_open_notifications or (lambda: None)),
+        )
+        self.bell_btn.pack(side="right", padx=4)
+
         ctk.CTkLabel(
             self, text=f"v{__version__}", text_color="gray50",
             font=ctk.CTkFont(size=11),
         ).pack(side="right", padx=(4, 8))
+        ctk.CTkButton(
+            self, text="Email", width=56, height=24,
+            fg_color="transparent", hover_color="#333333",
+            text_color="gray70", font=ctk.CTkFont(size=11, underline=True),
+            command=(self.on_edit_email or (lambda: None)),
+        ).pack(side="right", padx=4)
         ctk.CTkButton(
             self, text="Backup", width=70, height=24,
             fg_color="transparent", hover_color="#333333",
@@ -1118,6 +1525,15 @@ class TopBar(ctk.CTkFrame):
     def set_sync_status(self, text):
         try:
             self.sync_label.configure(text=text)
+        except Exception:
+            pass
+
+    def set_notification_count(self, n):
+        try:
+            self.bell_btn.configure(
+                text=f"🔔 {n}" if n else "🔔",
+                fg_color="#a52a2a" if n else "transparent",
+            )
         except Exception:
             pass
 
@@ -1176,6 +1592,200 @@ class BottomBar(ctk.CTkFrame):
             return
         db.set_fx_rate(rate)
         self.on_currency_change()
+
+
+class NotificationsPopup(ctk.CTkToplevel):
+    """Bell popup: pending invitations (Accept/Decline) + recent notifications."""
+
+    def __init__(self, master, on_change):
+        super().__init__(master)
+        self.on_change = on_change
+        self.title("Notifications")
+        self.geometry("440x480")
+        self.transient(master.winfo_toplevel())
+        self.grab_set()
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkButton(self, text="Close", fg_color="gray30",
+                      command=self.destroy).pack(pady=(0, 12))
+
+        self.update_idletasks()
+        self.lift()
+        self.focus_force()
+        self._build()
+
+    def _build(self):
+        for w in self.scroll.winfo_children():
+            w.destroy()
+        active = user_profile.get_active() or ""
+
+        invites = db.list_incoming_invites(active)
+        if invites:
+            ctk.CTkLabel(self.scroll, text="Pending invitations",
+                         font=ctk.CTkFont(size=14, weight="bold")).pack(
+                anchor="w", pady=(2, 6))
+            for inv in invites:
+                card = ctk.CTkFrame(self.scroll, fg_color="#1f1f1f", corner_radius=8)
+                card.pack(fill="x", pady=4)
+                ctk.CTkLabel(
+                    card,
+                    text=f'{inv["inviter"]} invited you to “{inv["business_name"]}”',
+                    wraplength=360, justify="left",
+                ).pack(anchor="w", padx=12, pady=(10, 6))
+                btns = ctk.CTkFrame(card, fg_color="transparent")
+                btns.pack(fill="x", padx=12, pady=(0, 10))
+                ctk.CTkButton(btns, text="Accept", width=90,
+                              command=lambda i=inv["id"]: self._accept(i)).pack(side="left")
+                ctk.CTkButton(btns, text="Decline", width=90, fg_color="gray30",
+                              command=lambda i=inv["id"]: self._decline(i)).pack(
+                    side="left", padx=8)
+
+        ctk.CTkLabel(self.scroll, text="Recent",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(
+            anchor="w", pady=(12, 6))
+        recents = db.list_recent_notifications(active, 20)
+        if not recents:
+            ctk.CTkLabel(self.scroll, text="Nothing yet.",
+                         text_color="gray60").pack(anchor="w", padx=4, pady=6)
+        for n in recents:
+            row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            ctk.CTkLabel(row, text=("•" if not n["seen"] else "·"),
+                         text_color="#4caf50" if not n["seen"] else "gray50",
+                         width=14).pack(side="left", padx=(2, 4), anchor="n")
+            txt = n["title"]
+            if n["body"]:
+                txt += f"\n{n['body']}"
+            ctk.CTkLabel(row, text=txt, justify="left", wraplength=360,
+                         text_color="white" if not n["seen"] else "gray60").pack(
+                side="left", anchor="w")
+
+    def _accept(self, invite_id):
+        db.submit_write(lambda: db.accept_invite(invite_id),
+                        on_done=lambda: self.after(0, self._after_action))
+
+    def _decline(self, invite_id):
+        db.submit_write(lambda: db.decline_invite(invite_id),
+                        on_done=lambda: self.after(0, self._after_action))
+
+    def _after_action(self):
+        try:
+            self._build()
+        except tk.TclError:
+            return
+        if self.on_change:
+            self.on_change()
+
+
+class EmailDialog(ctk.CTkToplevel):
+    """Edit the active profile's email (used for @-mention alerts)."""
+
+    def __init__(self, master, profile_name, current_email, on_save):
+        super().__init__(master)
+        self.on_save = on_save
+        self.title("My email")
+        self.geometry("400x190")
+        self.transient(master.winfo_toplevel())
+        self.grab_set()
+
+        ctk.CTkLabel(self, text=f"Email for {profile_name}",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(
+            anchor="w", padx=20, pady=(20, 2))
+        ctk.CTkLabel(self, text="Where @-mention alerts are sent.",
+                     text_color="gray60").pack(anchor="w", padx=20)
+        self.entry = ctk.CTkEntry(self, placeholder_text="you@example.com")
+        self.entry.pack(fill="x", padx=20, pady=12)
+        if current_email:
+            self.entry.insert(0, current_email)
+        self.entry.focus()
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(0, 16))
+        ctk.CTkButton(btns, text="Cancel", fg_color="gray30",
+                      command=self.destroy).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(btns, text="Save", command=self._save).pack(side="right")
+        self.bind("<Return>", lambda _e: self._save())
+
+    def _save(self):
+        email = self.entry.get().strip()
+        self.on_save(email)
+        self.destroy()
+
+
+class OwnerAssignmentModal(ctk.CTkToplevel):
+    """One-time screen to assign an owner to each pre-existing (unowned)
+    top-level business. Defaults every selection to the active profile so the
+    migrating user never loses access to their own businesses."""
+
+    def __init__(self, master, on_done):
+        super().__init__(master)
+        self.on_done = on_done
+        self.title("Set business owners")
+        self.geometry("480x520")
+        self.transient(master.winfo_toplevel())
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # must choose
+
+        active = user_profile.get_active() or ""
+        try:
+            names = [p["name"] for p in db.list_profiles_full()] or [active]
+        except Exception:
+            names = [active]
+        if active and active not in names:
+            names.insert(0, active)
+
+        ctk.CTkLabel(self, text="Who owns each business?",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(
+            anchor="w", padx=20, pady=(20, 2))
+        ctk.CTkLabel(
+            self, wraplength=430, justify="left", text_color="gray60",
+            text=("Business Tracker now gates each business to its owner and the "
+                  "people they invite. Pick an owner for each existing business "
+                  "(defaults to you). You can invite others afterwards."),
+        ).pack(anchor="w", padx=20, pady=(0, 8))
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=16, pady=8)
+
+        self.choices = {}  # business_id -> StringVar
+        unowned = db.list_unowned_top_level()
+        for biz in unowned:
+            row = ctk.CTkFrame(scroll)
+            row.pack(fill="x", pady=4)
+            ctk.CTkLabel(row, text=biz["name"], anchor="w",
+                         font=ctk.CTkFont(size=13, weight="bold")).pack(
+                side="left", padx=12, pady=10)
+            var = ctk.StringVar(value=active if active in names else names[0])
+            ctk.CTkOptionMenu(row, values=names, variable=var, width=170).pack(
+                side="right", padx=12)
+            self.choices[biz["id"]] = var
+
+        ctk.CTkButton(self, text="Save owners", command=self._save).pack(
+            pady=(4, 16))
+
+        self.update_idletasks()
+        self.lift()
+        self.focus_force()
+
+    def _save(self):
+        assignments = {bid: var.get() for bid, var in self.choices.items()}
+
+        def work():
+            for bid, owner in assignments.items():
+                if owner:
+                    db.set_owner(bid, owner)
+            db._set_setting("owner_assignment_done", "1")
+
+        db.submit_write(work, on_done=lambda: self.after(0, self._finish))
+
+    def _finish(self):
+        if self.on_done:
+            self.on_done()
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
 
 class UpdateBanner(ctk.CTkFrame):
@@ -1238,8 +1848,16 @@ class App(ctk.CTk):
             on_switch_profile=self._switch_profile,
             on_check_updates=lambda: self._check_for_updates(manual=True),
             on_backup=self._export_backup,
+            on_open_notifications=self._open_notifications,
+            on_edit_email=self._edit_email,
         )
         self.topbar.pack(side="top", fill="x")
+        # Toast widgets currently on screen (so we can stack + auto-dismiss them).
+        self._toasts = []
+        # Notification ids already toasted this process — guards against a brief
+        # double-toast window before `seen` replicates across this profile's
+        # other machines.
+        self._toasted_ids = set()
 
         # Update banner sits between topbar and body — hidden until needed.
         self.update_banner = UpdateBanner(self)
@@ -1314,7 +1932,91 @@ class App(ctk.CTk):
         def _picked(_name):
             self.topbar.refresh_profile_badge()
             self.detail.show(self.sidebar.selected_id)
+            self.sidebar.refresh()
+            self._update_notification_badge()
         ProfilePicker(self, on_pick=_picked, allow_cancel=True)
+
+    def _open_notifications(self):
+        NotificationsPopup(self, on_change=self._after_notification_action)
+
+    def _after_notification_action(self):
+        self.sidebar.refresh()
+        self._update_notification_badge()
+
+    def _edit_email(self):
+        active = user_profile.get_active()
+        if not active:
+            return
+        current = db.get_profile_email(active)
+
+        def _save(email):
+            db.submit_write(lambda: db.set_profile_email(active, email))
+            messagebox.showinfo("Saved", "Email updated.")
+        EmailDialog(self, active, current, on_save=_save)
+
+    def _update_notification_badge(self):
+        active = user_profile.get_active()
+        try:
+            count = len(db.list_incoming_invites(active)) if active else 0
+        except Exception:
+            count = 0
+        self.topbar.set_notification_count(count)
+
+    def _show_toast(self, title, body):
+        """Small in-app toast at the bottom-right; auto-dismisses after ~6s."""
+        try:
+            toast = ctk.CTkFrame(self, fg_color="#1f6aa5", corner_radius=8)
+            ctk.CTkLabel(toast, text=title, font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="white", wraplength=300, justify="left").pack(
+                anchor="w", padx=12, pady=(8, 0))
+            if body:
+                ctk.CTkLabel(toast, text=body, text_color="white",
+                             wraplength=300, justify="left").pack(
+                    anchor="w", padx=12, pady=(0, 8))
+            else:
+                toast.configure(height=10)
+            self._toasts.append(toast)
+            self._restack_toasts()
+            self.after(6000, lambda: self._dismiss_toast(toast))
+        except Exception as e:
+            print(f"[toast] {e}")
+
+    def _restack_toasts(self):
+        y = 0.96
+        for t in reversed(self._toasts):
+            try:
+                t.place(relx=0.99, rely=y, anchor="se")
+            except tk.TclError:
+                pass
+            y -= 0.10
+
+    def _dismiss_toast(self, toast):
+        if toast in self._toasts:
+            self._toasts.remove(toast)
+        try:
+            toast.destroy()
+        except tk.TclError:
+            pass
+        self._restack_toasts()
+
+    def _poll_notifications(self):
+        active = user_profile.get_active()
+        if not active:
+            return
+        try:
+            rows = db.list_unseen_notifications(active)
+        except Exception as e:
+            print(f"[notifications] poll failed: {e}")
+            return
+        fresh = [r for r in rows if r["id"] not in self._toasted_ids]
+        if not fresh:
+            return
+        ids = [r["id"] for r in fresh]
+        for r in fresh:
+            self._toasted_ids.add(r["id"])
+            self._show_toast(r["title"], r["body"])
+            notify.desktop_notify(r["title"], r["body"])
+        db.submit_write(lambda: db.mark_notifications_seen(ids))
 
     def _check_for_updates(self, manual: bool):
         """Hit GitHub Releases on a background thread and show the banner if
@@ -1351,14 +2053,16 @@ class App(ctk.CTk):
     def refresh_from_remote(self):
         """Called on the Tk main thread after a successful background sync.
 
-        We deliberately do NOT rebuild the detail pane here — doing so would
-        clobber whatever the user is typing in a form. Sidebar refresh is
-        cheap (no input fields). Detail data refreshes on the user's next
-        action (add/edit/select), which all go through the sync path.
+        Refreshes the sidebar + read-only detail views (Overview always; the
+        editable tabs self-guard against clobbering open editors / dirty fields),
+        polls for notifications addressed to this profile, and updates the bell.
         """
         from datetime import datetime as _dt
         self.topbar.set_sync_status(f"Synced {_dt.now().strftime('%H:%M:%S')}")
         self.sidebar.refresh()
+        self.detail.live_refresh()
+        self._poll_notifications()
+        self._update_notification_badge()
 
 
 def run():
@@ -1393,9 +2097,36 @@ def run():
             return  # user closed somehow; abort
         app.topbar.refresh_profile_badge()
 
+    active = user_profile.get_active()
+
+    # One-time owner assignment for pre-existing (unowned) businesses. Until the
+    # user assigns owners, list_top_level_for treats owner='' as visible-to-all,
+    # so nothing has disappeared from anyone's sidebar in the meantime.
+    try:
+        unowned = db.list_unowned_top_level()
+        already_done = db._get_setting("owner_assignment_done", "0") == "1"
+    except Exception:
+        unowned, already_done = [], True
+    if unowned and not already_done:
+        owner_modal = OwnerAssignmentModal(app, on_done=app.sidebar.refresh)
+        app.wait_window(owner_modal)
+        app.sidebar.refresh()
+
+    # Initial presence stamp + bell badge.
+    try:
+        db.touch_presence(active)
+    except Exception:
+        pass
+    app._update_notification_badge()
+
     # Periodic background sync — pulls remote changes every 10s. Callbacks
     # fire on the sync thread, so we hop back to the Tk main loop.
     def _on_synced():
+        # Heartbeat on the sync thread (no schedule_sync, so no storm).
+        try:
+            db.touch_presence(user_profile.get_active())
+        except Exception:
+            pass
         try:
             app.after(0, app.refresh_from_remote)
         except Exception:

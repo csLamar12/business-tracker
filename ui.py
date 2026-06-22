@@ -178,6 +178,17 @@ def fmt_money(v, currency="USD"):
     return f"{CURRENCY_SYMBOL.get(currency, '')}{v:,.2f} {currency}"
 
 
+def _fmt_edit(field, value):
+    """Format an edited value for optimistic in-table display (amount/rate get
+    thousands separators like the refresh() rows; everything else as-is)."""
+    if field in ("amount", "fx_rate"):
+        try:
+            return f"{float(value):,.2f}"
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
 class BusinessForm(ctk.CTkToplevel):
     """Modal for adding a new business or subsidiary."""
 
@@ -210,9 +221,13 @@ class BusinessForm(ctk.CTkToplevel):
             messagebox.showwarning("Missing name", "Please enter a name.", parent=self)
             return
         owner = user_profile.get_active() or ""
-        db.add_business(name, self.parent_id, owner=owner)
-        if self.on_save:
-            self.on_save()
+        pid = self.parent_id
+        on_save = self.on_save
+        master = self.master  # survives self.destroy(), used to marshal on_done
+        db.submit_write(
+            lambda: db.add_business(name, pid, owner=owner),
+            on_done=(lambda: master.after(0, on_save)) if on_save else None,
+        )
         self.destroy()
 
 
@@ -308,11 +323,9 @@ class ProfilePicker(ctk.CTkToplevel):
             messagebox.showwarning("Missing name", "Enter a profile name.", parent=self)
             return
         email = self.new_email.get().strip()
-        try:
-            db.add_profile(name, email)
-        except Exception as e:
-            messagebox.showerror("Couldn't create", str(e), parent=self)
-            return
+        # Persist in the background; the active profile is tracked locally so we
+        # don't need to block on the ~1.8s remote write to proceed.
+        db.submit_write(lambda: db.add_profile(name, email))
         self._pick(name)
 
     def _pick(self, name):
@@ -586,6 +599,45 @@ class DataTable(ctk.CTkFrame):
     def is_editing(self):
         return self._editor is not None
 
+    # ---------- optimistic updates ----------
+    # Apply a change to the visible table instantly; the real background write
+    # reconciles via the next refresh(). Keeps the UI "snappy" despite ~1.8s
+    # remote writes.
+
+    def _item_for(self, row_id):
+        for item in self.tree.get_children():
+            try:
+                if int(self.tree.set(item, "id")) == int(row_id):
+                    return item
+            except (ValueError, tk.TclError):
+                continue
+        return None
+
+    def optimistic_update(self, row_id, col_key, value):
+        item = self._item_for(row_id)
+        if item is not None:
+            try:
+                self.tree.set(item, col_key, value)
+            except tk.TclError:
+                return
+            if row_id in self._raw_by_id:
+                self._raw_by_id[row_id][col_key] = value
+
+    def optimistic_delete(self, row_id):
+        item = self._item_for(row_id)
+        if item is not None:
+            try:
+                self.tree.delete(item)
+            except tk.TclError:
+                pass
+            self._raw_by_id.pop(row_id, None)
+
+    def optimistic_insert(self, values):
+        try:
+            self.tree.insert("", 0, values=values)
+        except tk.TclError:
+            pass
+
     def _handle_delete(self, _e):
         sel = self.tree.selection()
         if not sel:
@@ -808,28 +860,42 @@ class IncomeTab(ctk.CTkFrame):
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
 
+        # Optimistic row so the entry appears instantly; the background write
+        # reconciles (real id + converted total) on refresh ~1-2s later.
+        display = db.get_display_currency()
+        fx = db.get_fx_rate()
+        conv = fmt_money(db.convert(amount, currency, display, fx), display)
+        self.table.optimistic_insert(
+            ("…", date_val, source, f"{amount:,.2f}", currency, f"{fx:,.2f}",
+             conv, notes, profile_name or "—"))
+
         def work():
             new_id = db.add_income(bid, date_val, source, amount, currency, notes, profile_name)
             process_mentions("income", new_id, "notes", notes, bid, profile_name)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def _delete(self, row_id):
+        self.table.optimistic_delete(row_id)
         db.submit_write(
             lambda: db.delete_income(row_id),
             on_done=lambda: self.after(0, self.refresh),
+            on_error=lambda _e: self.after(0, self.refresh),
         )
 
     def _edit(self, row_id, field, value):
         bid = self.business_id
         author = user_profile.get_active() or ""
+        self.table.optimistic_update(row_id, field, _fmt_edit(field, value))
 
         def work():
             db.update_income(row_id, field, value)
             if field == "notes":
                 process_mentions("income", row_id, "notes", value, bid, author)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def refresh(self):
         display = db.get_display_currency()
@@ -965,28 +1031,40 @@ class ExpenseTab(ctk.CTkFrame):
         self.amount_entry.delete(0, "end")
         self.notes_entry.delete(0, "end")
 
+        display = db.get_display_currency()
+        fx = db.get_fx_rate()
+        conv = fmt_money(db.convert(amount, currency, display, fx), display)
+        self.table.optimistic_insert(
+            ("…", date_val, category, f"{amount:,.2f}", currency, f"{fx:,.2f}",
+             conv, notes, profile_name or "—"))
+
         def work():
             new_id = db.add_expense(bid, date_val, category, amount, currency, notes, profile_name)
             process_mentions("expense", new_id, "notes", notes, bid, profile_name)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def _delete(self, row_id):
+        self.table.optimistic_delete(row_id)
         db.submit_write(
             lambda: db.delete_expense(row_id),
             on_done=lambda: self.after(0, self.refresh),
+            on_error=lambda _e: self.after(0, self.refresh),
         )
 
     def _edit(self, row_id, field, value):
         bid = self.business_id
         author = user_profile.get_active() or ""
+        self.table.optimistic_update(row_id, field, _fmt_edit(field, value))
 
         def work():
             db.update_expense(row_id, field, value)
             if field == "notes":
                 process_mentions("expense", row_id, "notes", value, bid, author)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def refresh(self):
         display = db.get_display_currency()
@@ -1100,28 +1178,37 @@ class PlansTab(ctk.CTkFrame):
         self.target_entry.set_date(date.today())
         self.desc_entry.delete(0, "end")
 
+        self.table.optimistic_insert(
+            ("…", title, target_val or "—", status, description,
+             profile_name or "—"))
+
         def work():
             new_id = db.add_plan(bid, title, description, target_val, status, profile_name)
             process_mentions("plan", new_id, "description", description, bid, profile_name)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def _delete(self, row_id):
+        self.table.optimistic_delete(row_id)
         db.submit_write(
             lambda: db.delete_plan(row_id),
             on_done=lambda: self.after(0, self.refresh),
+            on_error=lambda _e: self.after(0, self.refresh),
         )
 
     def _edit(self, row_id, field, value):
         bid = self.business_id
         author = user_profile.get_active() or ""
+        self.table.optimistic_update(row_id, field, value)
 
         def work():
             db.update_plan(row_id, field, value)
             if field == "description":
                 process_mentions("plan", row_id, "description", value, bid, author)
 
-        db.submit_write(work, on_done=lambda: self.after(0, self.refresh))
+        db.submit_write(work, on_done=lambda: self.after(0, self.refresh),
+                        on_error=lambda _e: self.after(0, self.refresh))
 
     def refresh(self):
         rows = db.list_plans(self.business_id)
@@ -1365,21 +1452,23 @@ class OverviewTab(ctk.CTkFrame):
         return f
 
     def _rename(self):
-        biz = db.get_business(self.business_id)
+        bid = self.business_id
         dlg = ctk.CTkInputDialog(text="New name:", title="Rename")
         new_name = dlg.get_input()
         if new_name and new_name.strip():
-            db.rename_business(self.business_id, new_name.strip())
-            self.on_rename()
+            name = new_name.strip()
+            db.submit_write(lambda: db.rename_business(bid, name),
+                            on_done=lambda: self.after(0, self.on_rename))
 
     def _delete(self):
         biz = db.get_business(self.business_id)
+        bid = self.business_id
         msg = f"Delete '{biz['name']}'?"
         if not biz["parent_id"]:
             msg += "\n\nThis will also delete all its subsidiaries and their data."
         if messagebox.askyesno("Confirm delete", msg):
-            db.delete_business(self.business_id)
-            self.on_delete()
+            db.submit_write(lambda: db.delete_business(bid),
+                            on_done=lambda: self.after(0, self.on_delete))
 
     def _share(self):
         biz = db.get_business(self.business_id)
@@ -2124,21 +2213,30 @@ def run():
         app.wait_window(owner_modal)
         app.sidebar.refresh()
 
-    # Initial presence stamp + bell badge.
+    # Initial presence stamp (off the UI thread) + bell badge.
     try:
-        db.touch_presence(active)
+        db.submit_write(lambda: db.touch_presence(active), silent=True)
     except Exception:
         pass
     app._update_notification_badge()
 
     # Periodic background sync — pulls remote changes every 10s. Callbacks
     # fire on the sync thread, so we hop back to the Tk main loop.
+    _sync_ticks = {"n": 0}
+
     def _on_synced():
-        # Heartbeat on the sync thread (no schedule_sync, so no storm).
-        try:
-            db.touch_presence(user_profile.get_active())
-        except Exception:
-            pass
+        # Presence is a ~1.8s remote write, so do it sparingly and on the WRITER
+        # thread (not here on the sync thread holding _lock) — otherwise every
+        # user save would queue behind a heartbeat. Once per ~30s is plenty.
+        _sync_ticks["n"] += 1
+        if _sync_ticks["n"] % 3 == 0:
+            try:
+                db.submit_write(
+                    lambda: db.touch_presence(user_profile.get_active()),
+                    silent=True,
+                )
+            except Exception:
+                pass
         try:
             app.after(0, app.refresh_from_remote)
         except Exception:

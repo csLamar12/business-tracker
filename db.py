@@ -161,7 +161,7 @@ def _writer_loop():
             continue
         if item is None:
             break
-        fn, on_done, on_error = item
+        fn, on_done, on_error, silent = item
         try:
             fn()
         except Exception as e:
@@ -178,7 +178,8 @@ def _writer_loop():
                 except Exception:
                     pass
         finally:
-            _decrement_pending()
+            if not silent:
+                _decrement_pending()
 
 
 def _start_writer():
@@ -220,15 +221,20 @@ def set_pending_writes_callback(cb):
     _on_pending_change = cb
 
 
-def submit_write(fn, on_done=None, on_error=None):
+def submit_write(fn, on_done=None, on_error=None, silent=False):
     """Queue `fn` to run on the background writer thread. UI thread returns
     instantly. on_done() (if provided) runs on the writer thread after a
     successful write — callers should marshal back to the Tk main thread
     via `widget.after(0, ...)` for any UI updates.
+
+    silent=True omits this write from the "Saving..." pending counter — used
+    for background housekeeping (e.g. presence heartbeats) that shouldn't flash
+    a saving indicator on the user.
     """
     _start_writer()
-    _increment_pending()
-    _write_queue.put((fn, on_done, on_error))
+    if not silent:
+        _increment_pending()
+    _write_queue.put((fn, on_done, on_error, silent))
 
 
 def stop_writer():
@@ -648,7 +654,15 @@ def is_online(last_seen_iso, window_seconds=45):
 
 # ---------- Settings / FX ----------
 
+# Transient in-memory override for settings the user just changed. Holds the new
+# value for the ~1-2s until the background write persists, so currency/FX-rate
+# changes apply to the UI INSTANTLY instead of freezing on the remote write.
+_settings_override = {}
+
+
 def _get_setting(key, default):
+    if key in _settings_override:
+        return _settings_override[key]
     row = _query_one("SELECT value FROM settings WHERE key = ?", (key,))
     return row["value"] if row else default
 
@@ -662,12 +676,25 @@ def _set_setting(key, value):
         )
 
 
+def _set_setting_optimistic(key, value):
+    """Apply a setting instantly (in-memory) and persist in the background.
+    Returns immediately — never blocks the UI on the ~1.8s remote write."""
+    _settings_override[key] = str(value)
+
+    def _persist():
+        _set_setting(key, value)
+        # DB is now authoritative; drop the override so remote changes win.
+        _settings_override.pop(key, None)
+
+    submit_write(_persist, silent=True)
+
+
 def get_display_currency():
     return _get_setting("display_currency", "USD")
 
 
 def set_display_currency(currency):
-    _set_setting("display_currency", currency)
+    _set_setting_optimistic("display_currency", currency)
 
 
 def get_fx_rate():
@@ -679,7 +706,7 @@ def get_fx_rate():
 
 
 def set_fx_rate(rate):
-    _set_setting("fx_jmd_per_usd", float(rate))
+    _set_setting_optimistic("fx_jmd_per_usd", float(rate))
 
 
 def convert(amount, from_curr, to_curr, rate=None):

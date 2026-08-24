@@ -1,23 +1,48 @@
-.venv/
-__pycache__/
-*.pyc
-*.pyo
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
 .DS_Store
-*.egg-info/
-build/
-dist/
-*.spec
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# legacy / local
 .idea/
-.vscode/
-
-# Secrets — DO NOT COMMIT
 config.py
-
-# Local DB artifacts
-business_tracker.db
-business_tracker.db-*
-business_tracker.wal.db*
-replica.db
-replica.db-*
-test_replica.db
-test_replica.db-*
+replica.db*
+*.spec
+.venv/

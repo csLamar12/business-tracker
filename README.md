@@ -1,68 +1,94 @@
-# Business Tracker
+# Business Tracker (web)
 
-Cross-platform desktop app (Python + CustomTkinter) for tracking multiple businesses, their subsidiaries, income, expenses, plans, and current operating phase. Backed by [Turso](https://turso.tech) so multiple users share the same data.
+Multi-business income / expense / plan tracker for **AnchorPoint Systems**, live at
+**[tracker.anchorpointja.com](https://tracker.anchorpointja.com)**. Next.js (App Router,
+TypeScript) + MongoDB, with authentication via the standalone
+[`anchor-auth`](https://github.com/csLamar12/anchor-auth) service. Deployed on Railway,
+fronted by Cloudflare.
+
+> This replaces the former Python/CustomTkinter desktop app. The desktop source and its
+> release binaries remain in the git history at tag **`v1.1.2`** and the GitHub Releases.
 
 ## Features
 
-- Multiple top-level businesses, each with nested subsidiaries
-- Income & expense entries per business, per-row currency (USD / JMD), global display-currency picker with FX rate
-- Plans with status, target dates
-- Current operating phase + free-text notes per business
-- Inline cell editing (double-click any cell), date pickers, dropdowns
-- Subsidiary totals roll up into parent dashboards
-- Per-row audit: who created each entry (profile name)
-- Persistent local profile (no expiring login)
-- **@-mentions** in any notes field — type `@` to mention a profile; they get an
-  email + a desktop/tray notification + an in-app alert
-- **Profile emails + online/offline presence** (green/gray dots)
-- **Per-business privacy + sharing** — each business has an owner; invite another
-  profile to a specific business (they Accept in-app to get the same full access)
-- Live overview that updates when another client changes data
-- Background sync to Turso every 10s + push on every write (reads are lock-free,
-  so the UI never stalls while a sync is in flight)
-- In-app GitHub Releases update check with banner
+- Businesses + one level of subsidiaries; overview with rollups incl. subsidiaries
+- Income / Expenses / Plans with inline-editable tables, per-transaction **locked FX rate**,
+  per-user display currency (USD / JMD)
+- Operating phase + notes per business
+- **@-mentions** in any notes field → email (Gmail SMTP) + in-app + browser notification
+- Online/offline **presence**, **invite + accept** business sharing (owner-gated)
+- **Monthly trend chart**, **CSV export/import**, search, mobile-responsive
+- Admin activity/audit view (`/admin`), 4 themes (Aegean / Amalfi / Manhattan / Midnight)
+- Email + password auth, httpOnly-cookie sessions, 7-day rotating refresh
 
-## First-time setup
+## Local development
 
 ```bash
-# 1. Get Tk bindings (macOS)
-brew install python-tk@3.13
-
-# 2. Clone + venv
-git clone https://github.com/csLamar12/business-tracker.git
-cd business-tracker
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 3. Configure Turso credentials (+ email for @-mention alerts)
-cp config.example.py config.py
-# edit config.py with your TURSO_URL and TURSO_TOKEN
-# for @-mention emails, set SMTP_USER + SMTP_APP_PASSWORD (Gmail App Password).
-# Leave the password blank to disable email — in-app + desktop alerts still work.
-
-# 4. Run
-.venv/bin/python main.py
+npm install
+cp .env.example .env.local     # fill in the values (see below)
+npm run dev                    # http://localhost:3000
 ```
 
-On first launch you'll be prompted to pick or create a profile (with an optional
-email). After this update you'll also get a one-time screen to assign an owner to
-each existing business — until you do, existing businesses stay visible to
-everyone, so nothing disappears.
+You also need, locally:
 
-### Email setup (Gmail App Password)
+- **MongoDB** — `mongod --dbpath /tmp/mongo --port 27017`
+- **anchor-auth** — clone `csLamar12/anchor-auth`, then:
+  ```bash
+  cd anchor-auth/server && pip install -e . uvicorn
+  cd ../service && ANCHOR_AUTH_ALGORITHM=RS256 ANCHOR_AUTH_MULTI_APP=true \
+    ANCHOR_AUTH_APP_IDS='["tracker"]' MONGODB_URI=mongodb://127.0.0.1:27017 \
+    MONGODB_DB=anchor_auth uvicorn main:app --port 8000
+  ```
+  (In dev with RS256 and no keys it mints an ephemeral keypair; grab its public key from
+  `GET /auth/public-key` for `AUTH_JWT_PUBLIC_KEY`, or generate a stable one — see deploy.)
 
-`SMTP_USER`/`SMTP_APP_PASSWORD` live in `config.py` (gitignored) or env vars.
-Gmail requires an **App Password** (Google Account → Security → 2-Step
-Verification → App passwords), not your normal password. Set it via:
+## Environment
 
+| var | meaning |
+|---|---|
+| `APP_ORIGIN` | public origin, e.g. `https://tracker.anchorpointja.com` (cookie + CSRF) |
+| `MONGODB_URI` / `MONGODB_DB` | the tracker's own database (`tracker`) |
+| `AUTH_SERVICE_URL` | anchor-auth base URL (Railway private: `http://anchor-auth.railway.internal:8000`) |
+| `AUTH_APP_ID` / `AUTH_AUDIENCE` | `tracker` |
+| `AUTH_JWT_PUBLIC_KEY` | anchor-auth's RS256 public PEM (verifies access tokens locally) |
+| `ADMIN_EMAILS` | comma-separated emails granted admin on first login |
+| `SMTP_HOST/PORT/USER/APP_PASSWORD` | Gmail app password for mention/invite email |
+
+## Deploy (Railway + Cloudflare)
+
+Three Railway services in one project + a Cloudflare DNS record.
+
+**1. MongoDB** — add the Railway MongoDB plugin (or Atlas). Two logical DBs: `tracker`
+(this app) and `anchor_auth` (the auth service). Optional: add **Redis** for real
+logout revocation.
+
+**2. `anchor-auth` service** — deploy `csLamar12/anchor-auth` (`service/`). Generate an
+RS256 keypair once:
 ```bash
-export SMTP_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+python -c "from anchor_auth import generate_dev_keypair; a,b=generate_dev_keypair(); \
+  open('priv.pem','w').write(a); open('pub.pem','w').write(b)"
+```
+Set: `ANCHOR_AUTH_APP_ENV=production`, `ANCHOR_AUTH_ALGORITHM=RS256`,
+`ANCHOR_AUTH_JWT_PRIVATE_KEY` (priv.pem), `ANCHOR_AUTH_JWT_PUBLIC_KEY` (pub.pem),
+`ANCHOR_AUTH_MULTI_APP=true`, `ANCHOR_AUTH_APP_IDS=["tracker"]`,
+`ANCHOR_AUTH_ACCESS_TOKEN_EXPIRE_MINUTES=15`, `ANCHOR_AUTH_REFRESH_TOKEN_EXPIRE_DAYS=7`,
+`ANCHOR_AUTH_ROTATE_REFRESH_TOKENS=true`, `MONGODB_URI`, `MONGODB_DB=anchor_auth`,
+`ANCHOR_AUTH_EMAIL_PROVIDER=smtp` (+ `ANCHOR_AUTH_SMTP_*`), `ANCHOR_AUTH_OPS_EMAILS`.
+Keep it **private** (no public domain). **Override the start command** to bind IPv6 —
+Railway private networking is IPv6-only:
+```
+uvicorn main:app --host :: --port $PORT
 ```
 
-## Releasing a new version
+**3. `tracker-web` (this repo)** — public service, custom domain
+`tracker.anchorpointja.com`. Env: `MONGODB_URI` (→ `tracker`), `MONGODB_DB=tracker`,
+`AUTH_SERVICE_URL=http://anchor-auth.railway.internal:8000`, `AUTH_APP_ID=tracker`,
+`AUTH_AUDIENCE=tracker`, `AUTH_JWT_PUBLIC_KEY` (the **public** PEM), `APP_ORIGIN`,
+`ADMIN_EMAILS`, `SMTP_*`, `NODE_ENV=production`.
 
-1. Bump `__version__` in `version.py`
-2. Build the Mac `.app` and Windows `.exe`
-3. `git tag vX.Y.Z && git push --tags`
-4. Create a GitHub Release at that tag, attach the binaries
-5. Other clients see the update banner on next launch
+**4. Cloudflare** — in Railway, add `tracker.anchorpointja.com` as a custom domain; it
+gives a CNAME target. In Cloudflare create `CNAME tracker → <target>` **DNS-only (grey
+cloud)** first so Railway can issue the TLS cert, then switch to **proxied (orange)** and
+set SSL/TLS mode to **Full (strict)**. This replaces the old downloads page.
+
+The first user to sign up with an email in `ADMIN_EMAILS` becomes admin.

@@ -29,3 +29,32 @@ export function isOnline(
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
+
+/** Compact local "when it was added" stamp, e.g. "24 Aug, 2:15 PM". */
+export function fmtStamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true, // explicit AM/PM so a tiny "6:15" is never ambiguous
+  });
+}
+
+/** Full timestamp for hover/title, e.g. "Mon, 24 Aug 2026, 2:15:03 PM". */
+export function fmtStampFull(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+}

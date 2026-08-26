@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { jsonFetcher, apiJson } from "@/lib/apiClient";
 import { convert, fmtMoney } from "@/lib/currency";
-import { todayIso } from "@/lib/util";
+import { todayIso, fmtStamp, fmtStampFull } from "@/lib/util";
 import { toCsv, parseCsv, downloadCsv } from "@/lib/csv";
 import MentionInput from "../MentionInput";
 import AutocompleteInput from "../AutocompleteInput";
@@ -235,8 +235,15 @@ export default function TransactionsTab({
                 <td className="p-2 whitespace-nowrap">{fmtMoney(convert(r.amount, r.currency, display, r.fxRate || fxRate), display)}</td>
                 <td className="p-2 max-w-48"><Cell value={r.notes} expandable onSave={(v) => edit(r._id, "notes", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
-                <td className="p-2">
-                  <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)}>✕</button>
+                <td className="p-2 text-right align-top whitespace-nowrap">
+                  <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)} title="Delete entry">✕</button>
+                  <div
+                    className="mt-1 text-[10px] leading-none"
+                    style={{ color: "var(--muted)" }}
+                    title={`Added ${fmtStampFull(r.createdAt)}`}
+                  >
+                    {fmtStamp(r.createdAt)}
+                  </div>
                 </td>
               </tr>
             ))}

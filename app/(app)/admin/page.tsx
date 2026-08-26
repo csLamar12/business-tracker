@@ -87,9 +87,14 @@ export default function AdminPage() {
     if (!newEmail.trim()) return;
     setBusy(true);
     setMsg("");
+    const addr = newEmail.trim();
     try {
-      await apiJson("/api/admin/users", "POST", { email: newEmail.trim() });
-      setMsg(`Created ${newEmail.trim()} — they were emailed a code to set their password.`);
+      const r = await apiJson<{ existed?: boolean }>("/api/admin/users", "POST", { email: addr });
+      setMsg(
+        r.existed
+          ? `${addr} was already registered — sent them a fresh code to set their password.`
+          : `Created ${addr} — they were emailed a code to set their password.`,
+      );
       setNewEmail("");
       mutateUsers();
     } catch (err) {

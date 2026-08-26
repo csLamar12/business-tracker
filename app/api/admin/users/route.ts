@@ -25,20 +25,31 @@ export async function POST(req: NextRequest) {
   await ensureIndexes();
   // Meets anchor-auth's default policy (length + uppercase + digit).
   const tempPw = "Aa1" + randomBytes(18).toString("base64url");
+  let existed = false;
   try {
     const res = await authService.signup(email, tempPw);
     await upsertUserOnLogin(res.user.id, res.user.email);
   } catch (e) {
     if (e instanceof AuthError) {
       if (e.status === 0) return jsonError(503, "Auth service unavailable");
-      return jsonError(e.status || 400, e.message || "Could not create account (already exists?)");
+      // 409 = already registered in anchor-auth. That happens when an earlier
+      // attempt created the auth account but its code email never arrived,
+      // which used to strand the address: re-creating failed, and with no
+      // tracker user doc there was no row to "Reset password" from. Treat it as
+      // a resend instead — forgot-password keys off the email alone, and the
+      // tracker user doc is created by upsertUserOnLogin on their first login.
+      if (e.status !== 409) {
+        return jsonError(e.status || 400, e.message || "Could not create account");
+      }
+      existed = true;
+    } else {
+      return jsonError(500, "Create failed");
     }
-    return jsonError(500, "Create failed");
   }
   // Send the set-password code email (best-effort).
   try {
     await authService.forgotPassword(email);
   } catch {}
-  await recordEvent(ctx.sub, "created user", email);
-  return NextResponse.json({ ok: true });
+  await recordEvent(ctx.sub, existed ? "resent set-password code" : "created user", email);
+  return NextResponse.json({ ok: true, existed });
 }

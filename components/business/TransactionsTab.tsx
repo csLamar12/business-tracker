@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { jsonFetcher, apiJson } from "@/lib/apiClient";
 import { convert, fmtMoney } from "@/lib/currency";
-import { todayIso, fmtStamp, fmtStampFull } from "@/lib/util";
+import { todayIso, relTime, fmtStampFull } from "@/lib/util";
 import { toCsv, parseCsv, downloadCsv } from "@/lib/csv";
 import MentionInput from "../MentionInput";
 import AutocompleteInput from "../AutocompleteInput";
@@ -35,14 +35,14 @@ export default function TransactionsTab({
   const rows = data?.transactions ?? [];
   const nameById = new Map(users.map((u) => [u.id, u.displayName]));
 
-  // Autocomplete "memory" for the Source/Category field: values used before
-  // (server, most-used first) merged with what's already on screen, de-duped.
-  const { data: labelData } = useSWR<{ labels: string[] }>(
+  // Autocomplete "memory" for the Source/Category and Notes fields: values used
+  // before (server, most-used first) merged with what's on screen, de-duped.
+  const { data: labelData } = useSWR<{ labels: string[]; notes: string[] }>(
     `/api/transactions/labels?type=${type}`,
     jsonFetcher,
     { refreshInterval: 60000 },
   );
-  const labelPool = useMemo(() => {
+  const dedupe = (server: string[], local: string[]) => {
     const seen = new Set<string>();
     const out: string[] = [];
     const push = (s: string) => {
@@ -52,10 +52,18 @@ export default function TransactionsTab({
       seen.add(k);
       out.push(t);
     };
-    (labelData?.labels ?? []).forEach(push);
-    rows.forEach((r) => push(r.label));
+    server.forEach(push);
+    local.forEach(push);
     return out;
-  }, [labelData, rows]);
+  };
+  const labelPool = useMemo(
+    () => dedupe(labelData?.labels ?? [], rows.map((r) => r.label)),
+    [labelData, rows],
+  );
+  const notesPool = useMemo(
+    () => dedupe(labelData?.notes ?? [], rows.map((r) => r.notes)),
+    [labelData, rows],
+  );
 
   const [date, setDate] = useState(todayIso());
   const [label, setLabel] = useState("");
@@ -176,7 +184,7 @@ export default function TransactionsTab({
         </div>
         <div className="flex-1 min-w-48">
           <label className="label">Notes (@ to mention)</label>
-          <MentionInput value={notes} onChange={setNotes} names={names} placeholder="" onEnter={add} />
+          <MentionInput value={notes} onChange={setNotes} names={names} suggestions={notesPool} placeholder="" onEnter={add} />
         </div>
         <button className="btn" onClick={add}>
           Add {type === "income" ? "Income" : "Expense"}
@@ -242,7 +250,7 @@ export default function TransactionsTab({
                     style={{ color: "var(--muted)" }}
                     title={`Added ${fmtStampFull(r.createdAt)}`}
                   >
-                    {fmtStamp(r.createdAt)}
+                    {relTime(r.createdAt)}
                   </div>
                 </td>
               </tr>

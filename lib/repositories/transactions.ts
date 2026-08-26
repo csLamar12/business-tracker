@@ -67,14 +67,15 @@ export async function addTransaction(input: {
 }
 
 /**
- * Distinct Source/Category values the user has already typed, across every
- * business they can see, ranked by how often they've used each (most-used
- * first) — the "memory" that powers inline autocomplete on the add form.
+ * Distinct values the user has already typed for a given field (Source/Category
+ * `label`, or `notes`), across every business they can see, ranked by how often
+ * they've used each — the "memory" that powers inline autocomplete.
  */
-export async function distinctLabels(
+export async function distinctValues(
   sub: string,
   isAdmin: boolean,
   type: TxnType,
+  field: "label" | "notes",
   limit = 200,
 ): Promise<string[]> {
   const roots = await listTopLevelFor(sub, isAdmin);
@@ -88,7 +89,7 @@ export async function distinctLabels(
   const agg = await (await col.transactions())
     .aggregate<{ _id: string; n: number }>([
       { $match: { businessId: { $in: ids }, type } },
-      { $group: { _id: "$label", n: { $sum: 1 } } },
+      { $group: { _id: `$${field}`, n: { $sum: 1 } } },
       { $sort: { n: -1, _id: 1 } },
       { $limit: limit },
     ])

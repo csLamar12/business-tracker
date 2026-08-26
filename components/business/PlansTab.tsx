@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { jsonFetcher, apiJson } from "@/lib/apiClient";
+import { relTime, fmtStampFull } from "@/lib/util";
 import MentionInput from "../MentionInput";
 import Cell from "./Cell";
 import { PLAN_STATUSES } from "@/lib/types";
@@ -23,6 +24,28 @@ export default function PlansTab({
   });
   const rows = data?.plans ?? [];
   const nameById = new Map(users.map((u) => [u.id, u.displayName]));
+
+  // Autocomplete "memory" for the Description field: descriptions written before
+  // (server, most-used first) merged with what's on screen, de-duped.
+  const { data: descData } = useSWR<{ descriptions: string[] }>(
+    "/api/plans/descriptions",
+    jsonFetcher,
+    { refreshInterval: 60000 },
+  );
+  const descPool = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (s: string) => {
+      const t = (s ?? "").trim();
+      const k = t.toLowerCase();
+      if (!t || seen.has(k)) return;
+      seen.add(k);
+      out.push(t);
+    };
+    (descData?.descriptions ?? []).forEach(push);
+    rows.forEach((r) => push(r.description));
+    return out;
+  }, [descData, rows]);
 
   const [title, setTitle] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -80,7 +103,7 @@ export default function PlansTab({
         </div>
         <div className="flex-1 min-w-48">
           <label className="label">Description (@ to mention)</label>
-          <MentionInput value={description} onChange={setDescription} names={names} onEnter={add} />
+          <MentionInput value={description} onChange={setDescription} names={names} suggestions={descPool} onEnter={add} />
         </div>
         <button className="btn" onClick={add}>Add Plan</button>
       </div>
@@ -107,7 +130,16 @@ export default function PlansTab({
                 <td className="p-2 w-36"><Cell value={r.status} type="select" options={[...PLAN_STATUSES]} onSave={(v) => edit(r._id, "status", v)} /></td>
                 <td className="p-2 max-w-xs"><Cell value={r.description} expandable onSave={(v) => edit(r._id, "description", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
-                <td className="p-2"><button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)}>✕</button></td>
+                <td className="p-2 text-right align-top whitespace-nowrap">
+                  <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)} title="Delete plan">✕</button>
+                  <div
+                    className="mt-1 text-[10px] leading-none"
+                    style={{ color: "var(--muted)" }}
+                    title={`Added ${fmtStampFull(r.createdAt)}`}
+                  >
+                    {relTime(r.createdAt)}
+                  </div>
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (

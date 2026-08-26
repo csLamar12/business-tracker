@@ -30,17 +30,21 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-/** Compact local "when it was added" stamp, e.g. "24 Aug, 2:15 PM". */
-export function fmtStamp(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true, // explicit AM/PM so a tiny "6:15" is never ambiguous
-  });
+/** Relative "when it was added", e.g. "just now", "5m ago", "3h ago", "2d ago". */
+export function relTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const sec = Math.floor((Date.now() - t) / 1000);
+  if (sec < 45) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  if (day < 30) return `${Math.floor(day / 7)}w ago`;
+  if (day < 365) return `${Math.floor(day / 30)}mo ago`;
+  return `${Math.floor(day / 365)}y ago`;
 }
 
 /** Full timestamp for hover/title, e.g. "Mon, 24 Aug 2026, 2:15:03 PM". */

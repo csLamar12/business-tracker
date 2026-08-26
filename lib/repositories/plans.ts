@@ -1,6 +1,7 @@
 import { col, toObjectId, type PlanDoc } from "@/lib/db";
 import type { Plan, PlanStatus } from "@/lib/types";
 import { PLAN_STATUSES } from "@/lib/types";
+import { listTopLevelFor } from "./businesses";
 
 export const PLAN_FIELDS = new Set(["title", "description", "startDate", "targetDate", "status"]);
 
@@ -51,6 +52,35 @@ export async function addPlan(input: {
   };
   const res = await (await col.plans()).insertOne(doc as PlanDoc);
   return toPlan({ ...(doc as PlanDoc), _id: res.insertedId });
+}
+
+/**
+ * Distinct plan descriptions the user has written before, across every business
+ * they can see, most-used first — powers inline autocomplete on the Description
+ * field.
+ */
+export async function distinctDescriptions(
+  sub: string,
+  isAdmin: boolean,
+  limit = 200,
+): Promise<string[]> {
+  const roots = await listTopLevelFor(sub, isAdmin);
+  if (!roots.length) return [];
+  const businesses = await col.businesses();
+  const rootOids = roots.map((r) => toObjectId(r._id)).filter((o): o is NonNullable<typeof o> => !!o);
+  const subDocs = await businesses
+    .find({ parentId: { $in: rootOids } }, { projection: { _id: 1 } })
+    .toArray();
+  const ids = [...rootOids, ...subDocs.map((s) => s._id)];
+  const agg = await (await col.plans())
+    .aggregate<{ _id: string; n: number }>([
+      { $match: { businessId: { $in: ids } } },
+      { $group: { _id: "$description", n: { $sum: 1 } } },
+      { $sort: { n: -1, _id: 1 } },
+      { $limit: limit },
+    ])
+    .toArray();
+  return agg.map((a) => a._id).filter((s) => typeof s === "string" && s.trim().length > 0);
 }
 
 export async function getPlan(id: string): Promise<Plan | null> {

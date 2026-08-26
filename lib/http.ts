@@ -23,12 +23,24 @@ export async function requireMutation(req: NextRequest): Promise<Ctx | NextRespo
   return requireUser();
 }
 
-/** CSRF: reject cross-site mutating requests via an Origin allowlist. */
+/** CSRF: allow same-origin (+ an optional allowlist), reject cross-site. */
 export function originOk(req: NextRequest): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true; // no Origin (same-origin nav / server) — SameSite covers this
-  const allowed = process.env.APP_ORIGIN || "http://localhost:3000";
-  return origin === allowed;
+  // Same-origin: the Origin header's host matches the host we were requested on.
+  // Works on the Railway domain, the custom domain, and localhost alike.
+  const host = req.headers.get("host");
+  try {
+    if (host && new URL(origin).host === host) return true;
+  } catch {
+    return false;
+  }
+  // Fallback: an explicitly allow-listed origin (comma-separated APP_ORIGIN).
+  const allowed = (process.env.APP_ORIGIN || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return allowed.includes(origin);
 }
 
 export function jsonError(status: number, message: string) {

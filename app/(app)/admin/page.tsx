@@ -112,7 +112,8 @@ export default function AdminPage() {
   const users = usersData?.users ?? [];
 
   return (
-    <div className="mx-auto max-w-4xl p-6">
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-4xl p-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin</h1>
         <Link href="/" className="btn-ghost text-sm">← Dashboard</Link>
@@ -266,6 +267,7 @@ export default function AdminPage() {
             {!data?.events?.length && <p style={{ color: "var(--muted)" }}>No activity yet.</p>}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

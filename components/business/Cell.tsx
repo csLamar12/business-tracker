@@ -45,12 +45,15 @@ function ExpandableText({ value, onEdit }: { value: string; onEdit: () => void }
 
 export default function Cell({
   value,
+  display,
   type = "text",
   options,
   expandable = false,
   onSave,
 }: {
   value: string;
+  /** Text to show when not editing (e.g. a 2dp amount); editing still uses `value`. */
+  display?: string;
   type?: CellType;
   options?: string[];
   expandable?: boolean;
@@ -58,6 +61,7 @@ export default function Cell({
 }) {
   const [editing, setEditing] = useState(false);
   const [v, setV] = useState(value);
+  const shown = display ?? value;
 
   function commit() {
     setEditing(false);
@@ -71,11 +75,11 @@ export default function Cell({
 
   if (!editing) {
     if (expandable && value) {
-      return <ExpandableText value={value} onEdit={startEdit} />;
+      return <ExpandableText value={shown} onEdit={startEdit} />;
     }
     return (
       <span className="block cursor-pointer truncate" title="Double-click to edit" onDoubleClick={startEdit}>
-        {value || <span style={{ color: "var(--muted)" }}>—</span>}
+        {shown || <span style={{ color: "var(--muted)" }}>—</span>}
       </span>
     );
   }

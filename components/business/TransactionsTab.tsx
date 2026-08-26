@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { jsonFetcher, apiJson } from "@/lib/apiClient";
 import { convert, fmtMoney } from "@/lib/currency";
 import { todayIso } from "@/lib/util";
 import { toCsv, parseCsv, downloadCsv } from "@/lib/csv";
 import MentionInput from "../MentionInput";
+import AutocompleteInput from "../AutocompleteInput";
 import Cell from "./Cell";
 import type { Currency, PublicUser, Transaction, TxnType } from "@/lib/types";
 
@@ -33,6 +34,28 @@ export default function TransactionsTab({
   });
   const rows = data?.transactions ?? [];
   const nameById = new Map(users.map((u) => [u.id, u.displayName]));
+
+  // Autocomplete "memory" for the Source/Category field: values used before
+  // (server, most-used first) merged with what's already on screen, de-duped.
+  const { data: labelData } = useSWR<{ labels: string[] }>(
+    `/api/transactions/labels?type=${type}`,
+    jsonFetcher,
+    { refreshInterval: 60000 },
+  );
+  const labelPool = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (s: string) => {
+      const t = (s ?? "").trim();
+      const k = t.toLowerCase();
+      if (!t || seen.has(k)) return;
+      seen.add(k);
+      out.push(t);
+    };
+    (labelData?.labels ?? []).forEach(push);
+    rows.forEach((r) => push(r.label));
+    return out;
+  }, [labelData, rows]);
 
   const [date, setDate] = useState(todayIso());
   const [label, setLabel] = useState("");
@@ -138,7 +161,7 @@ export default function TransactionsTab({
         </div>
         <div className="flex-1 min-w-40">
           <label className="label">{labelWord}</label>
-          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} />
+          <AutocompleteInput value={label} onChange={setLabel} suggestions={labelPool} onEnter={add} />
         </div>
         <div className="w-28">
           <label className="label">Amount</label>
@@ -206,7 +229,7 @@ export default function TransactionsTab({
               <tr key={r._id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td className="p-2 w-28"><Cell value={r.date} type="date" onSave={(v) => edit(r._id, "date", v)} /></td>
                 <td className="p-2"><Cell value={r.label} onSave={(v) => edit(r._id, "label", v)} /></td>
-                <td className="p-2 w-24"><Cell value={String(r.amount)} type="number" onSave={(v) => edit(r._id, "amount", v)} /></td>
+                <td className="p-2 w-24"><Cell value={String(r.amount)} display={r.amount.toFixed(2)} type="number" onSave={(v) => edit(r._id, "amount", v)} /></td>
                 <td className="p-2 w-20"><Cell value={r.currency} type="select" options={["USD", "JMD"]} onSave={(v) => edit(r._id, "currency", v)} /></td>
                 <td className="p-2 w-20"><Cell value={String(r.fxRate)} type="number" onSave={(v) => edit(r._id, "fxRate", v)} /></td>
                 <td className="p-2 whitespace-nowrap">{fmtMoney(convert(r.amount, r.currency, display, r.fxRate || fxRate), display)}</td>

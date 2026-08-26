@@ -1,6 +1,7 @@
 import { col, toObjectId, type TransactionDoc } from "@/lib/db";
 import type { Currency, Transaction, TxnType } from "@/lib/types";
 import { getFxRate } from "./settings";
+import { listTopLevelFor } from "./businesses";
 
 // Editable fields (mirrors db.py _INCOME_FIELDS/_EXPENSE_FIELDS). fxRate is here
 // so an explicit rate edit is allowed, but it is NEVER auto-recomputed elsewhere.
@@ -63,6 +64,36 @@ export async function addTransaction(input: {
   };
   const res = await (await col.transactions()).insertOne(doc as TransactionDoc);
   return toTxn({ ...(doc as TransactionDoc), _id: res.insertedId });
+}
+
+/**
+ * Distinct Source/Category values the user has already typed, across every
+ * business they can see, ranked by how often they've used each (most-used
+ * first) — the "memory" that powers inline autocomplete on the add form.
+ */
+export async function distinctLabels(
+  sub: string,
+  isAdmin: boolean,
+  type: TxnType,
+  limit = 200,
+): Promise<string[]> {
+  const roots = await listTopLevelFor(sub, isAdmin);
+  if (!roots.length) return [];
+  const businesses = await col.businesses();
+  const rootOids = roots.map((r) => toObjectId(r._id)).filter((o): o is NonNullable<typeof o> => !!o);
+  const subDocs = await businesses
+    .find({ parentId: { $in: rootOids } }, { projection: { _id: 1 } })
+    .toArray();
+  const ids = [...rootOids, ...subDocs.map((s) => s._id)];
+  const agg = await (await col.transactions())
+    .aggregate<{ _id: string; n: number }>([
+      { $match: { businessId: { $in: ids }, type } },
+      { $group: { _id: "$label", n: { $sum: 1 } } },
+      { $sort: { n: -1, _id: 1 } },
+      { $limit: limit },
+    ])
+    .toArray();
+  return agg.map((a) => a._id).filter((s) => typeof s === "string" && s.trim().length > 0);
 }
 
 export async function getTransaction(id: string): Promise<Transaction | null> {

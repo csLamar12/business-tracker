@@ -10,27 +10,34 @@ const THEMES = [
 ];
 
 export default function ThemePicker() {
+  // `theme` is the single source of truth. A sync effect keeps the <html>
+  // data-theme + localStorage in lockstep with it, so the select value can
+  // never drift out of sync with what's on screen (which would make it look
+  // "stuck").
   const [theme, setTheme] = useState("aegean");
 
+  // Adopt whatever the pre-hydration script / localStorage already applied.
   useEffect(() => {
-    const saved = localStorage.getItem("bt-theme") || "aegean";
-    setTheme(saved);
-    document.documentElement.dataset.theme = saved;
+    const current =
+      document.documentElement.dataset.theme ||
+      localStorage.getItem("bt-theme") ||
+      "aegean";
+    setTheme(current);
   }, []);
 
-  function choose(id: string) {
-    setTheme(id);
-    document.documentElement.dataset.theme = id;
-    localStorage.setItem("bt-theme", id);
-  }
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem("bt-theme", theme);
+    } catch {}
+  }, [theme]);
 
   return (
     <div className="w-28">
       <select
         className="input py-1"
         value={theme}
-        onChange={(e) => choose(e.target.value)}
-        title="Theme"
+        onChange={(e) => setTheme(e.target.value)}
         aria-label="Theme"
       >
         {THEMES.map((t) => (

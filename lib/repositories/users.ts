@@ -74,6 +74,15 @@ export async function listUsers(): Promise<UserDoc[]> {
   return (await col.users()).find().sort({ displayName: 1 }).toArray();
 }
 
+/** Users for a specific set of subs (e.g. the members of one business). */
+export async function listUsersByIds(ids: string[]): Promise<UserDoc[]> {
+  if (!ids.length) return [];
+  return (await col.users())
+    .find({ _id: { $in: ids } })
+    .sort({ displayName: 1 })
+    .toArray();
+}
+
 export async function setDisplayName(
   sub: string,
   name: string,

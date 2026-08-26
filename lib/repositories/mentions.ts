@@ -1,8 +1,8 @@
 import { col } from "@/lib/db";
 import { parseMentions } from "@/lib/mentions";
 import { sendEmail } from "@/lib/mail";
-import { listUsers } from "./users";
-import { getBusiness } from "./businesses";
+import { listUsersByIds } from "./users";
+import { getBusiness, listMembers } from "./businesses";
 import { enqueueNotification } from "./notifications";
 
 const LABEL: Record<string, string> = {
@@ -26,7 +26,11 @@ export async function processMentions(
   authorSub: string,
 ): Promise<void> {
   try {
-    const users = await listUsers();
+    // Only people who share this business (owner + members) can be mentioned —
+    // walks to the root for subsidiaries. A name typed for a non-member simply
+    // won't resolve, so they're never notified about content they can't access.
+    const memberIds = await listMembers(businessId);
+    const users = await listUsersByIds(memberIds);
     const byName = new Map(users.map((u) => [u.displayName, u]));
     const present = parseMentions(text || "", [...byName.keys()]);
     if (!present.size) return;

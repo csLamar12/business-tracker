@@ -14,7 +14,6 @@ export default function Dashboard() {
     refreshInterval: 20000,
   });
   const users = data?.users ?? [];
-  const names = users.map((u) => u.displayName);
 
   function select(id: string) {
     setSelectedId(id);
@@ -40,7 +39,6 @@ export default function Dashboard() {
           <BusinessDetail
             key={selectedId}
             id={selectedId}
-            names={names}
             users={users}
             onDeleted={() => setSelectedId(null)}
           />

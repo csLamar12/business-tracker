@@ -26,12 +26,10 @@ type Tab = (typeof TABS)[number];
 
 export default function BusinessDetail({
   id,
-  names,
   users,
   onDeleted,
 }: {
   id: string;
-  names: string[];
   users: PublicUser[];
   onDeleted: () => void;
 }) {
@@ -50,6 +48,8 @@ export default function BusinessDetail({
 
   if (!data) return <div className="p-8" style={{ color: "var(--muted)" }}>Loading…</div>;
   const { business } = data;
+  // @-mentions are scoped to people who share this business (owner + members).
+  const memberNames = data.members.map((m) => m.displayName);
 
   async function rename() {
     if (newName.trim()) {
@@ -98,13 +98,13 @@ export default function BusinessDetail({
         <OverviewTab business={business} display={data.display} fxRate={data.fxRate} totals={data.totals} subs={data.subs} />
       )}
       {tab === "Income" && (
-        <TransactionsTab businessId={id} type="income" display={data.display} fxRate={data.fxRate} names={names} users={users} onChanged={refresh} />
+        <TransactionsTab businessId={id} type="income" display={data.display} fxRate={data.fxRate} names={memberNames} users={users} onChanged={refresh} />
       )}
       {tab === "Expenses" && (
-        <TransactionsTab businessId={id} type="expense" display={data.display} fxRate={data.fxRate} names={names} users={users} onChanged={refresh} />
+        <TransactionsTab businessId={id} type="expense" display={data.display} fxRate={data.fxRate} names={memberNames} users={users} onChanged={refresh} />
       )}
-      {tab === "Plans" && <PlansTab businessId={id} names={names} users={users} />}
-      {tab === "Phase" && <PhaseTab business={business} names={names} onChanged={refresh} />}
+      {tab === "Plans" && <PlansTab businessId={id} names={memberNames} users={users} />}
+      {tab === "Phase" && <PhaseTab business={business} names={memberNames} onChanged={refresh} />}
 
       {share && <InvitePicker business={business} users={users} onClose={() => setShare(false)} />}
       {renaming && (

@@ -41,12 +41,12 @@ export default function OverviewTab({
   const expLabel = isParent && subs.length ? "Expenses (incl. subsidiaries)" : "Expenses";
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <div className="mb-1 text-sm" style={{ color: "var(--muted)" }}>
         {isParent ? "Top-level Business" : "Subsidiary"} · Phase: {business.phase}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-4">
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:gap-4">
         <Card label={incLabel} value={fmtMoney(t.income, display)} accent="var(--green-text)" />
         <Card label={expLabel} value={fmtMoney(t.expenses, display)} accent="var(--red-text)" />
         <Card label="Net" value={fmtMoney(net, display)} accent={net >= 0 ? "var(--green-text)" : "var(--red-text)"} />

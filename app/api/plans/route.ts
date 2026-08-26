@@ -20,6 +20,7 @@ const createSchema = z.object({
   businessId: z.string().min(1),
   title: z.string().min(1).max(200),
   description: z.string().max(2000).default(""),
+  startDate: z.string().default(""),
   targetDate: z.string().default(""),
   status: z.enum(PLAN_STATUSES).default(PLAN_STATUSES[0]),
 });

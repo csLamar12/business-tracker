@@ -2,7 +2,7 @@ import { col, toObjectId, type PlanDoc } from "@/lib/db";
 import type { Plan, PlanStatus } from "@/lib/types";
 import { PLAN_STATUSES } from "@/lib/types";
 
-export const PLAN_FIELDS = new Set(["title", "description", "targetDate", "status"]);
+export const PLAN_FIELDS = new Set(["title", "description", "startDate", "targetDate", "status"]);
 
 function toPlan(d: PlanDoc): Plan {
   return {
@@ -10,6 +10,7 @@ function toPlan(d: PlanDoc): Plan {
     businessId: d.businessId.toHexString(),
     title: d.title,
     description: d.description,
+    startDate: d.startDate ?? "",
     targetDate: d.targetDate,
     status: d.status,
     createdBy: d.createdBy,
@@ -31,6 +32,7 @@ export async function addPlan(input: {
   businessId: string;
   title: string;
   description: string;
+  startDate: string;
   targetDate: string;
   status: PlanStatus;
   createdBy: string;
@@ -41,6 +43,7 @@ export async function addPlan(input: {
     businessId: oid,
     title: input.title,
     description: input.description,
+    startDate: input.startDate,
     targetDate: input.targetDate,
     status: PLAN_STATUSES.includes(input.status) ? input.status : PLAN_STATUSES[0],
     createdBy: input.createdBy,

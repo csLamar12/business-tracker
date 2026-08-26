@@ -63,13 +63,13 @@ export default function LoginPage() {
       <button className="btn w-full" disabled={busy}>
         {busy ? "Signing in…" : "Sign in"}
       </button>
-      <div className="flex justify-between text-sm">
-        <Link href="/forgot-password" className="hover:underline" style={{ color: "var(--muted)" }}>
-          Forgot password?
+      <div className="text-center text-sm">
+        <Link href="/reset-password" className="hover:underline" style={{ color: "var(--muted)" }}>
+          Have a reset code? Set your password
         </Link>
-        <Link href="/signup" className="hover:underline" style={{ color: "var(--accent)" }}>
-          Create account
-        </Link>
+        <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
+          Accounts are created by an admin.
+        </p>
       </div>
     </form>
   );

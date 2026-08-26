@@ -33,7 +33,7 @@ export default function ThemePicker() {
   }, [theme]);
 
   return (
-    <div className="w-28">
+    <div className="w-24 sm:w-28">
       <select
         className="input py-1"
         value={theme}

@@ -73,7 +73,8 @@ export interface Plan {
   businessId: string;
   title: string;
   description: string;
-  targetDate: string; // YYYY-MM-DD or ""
+  startDate: string; // YYYY-MM-DD or "" — goal to start
+  targetDate: string; // YYYY-MM-DD or "" — goal to finish
   status: PlanStatus;
   createdBy: string;
   createdAt: string;

@@ -67,8 +67,8 @@ export default function BusinessDetail({
 
   return (
     <div>
-      <div className="flex items-center justify-between px-6 pt-5">
-        <h1 className="text-2xl font-bold">{business.name}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-5 sm:px-6">
+        <h1 className="text-xl font-bold sm:text-2xl">{business.name}</h1>
         <div className="flex gap-2">
           {data.isOwner && (
             <button className="btn px-3 py-1.5 text-sm" onClick={() => setShare(true)}>Share</button>
@@ -78,11 +78,11 @@ export default function BusinessDetail({
         </div>
       </div>
 
-      <div className="mt-4 flex gap-1 border-b px-6" style={{ borderColor: "var(--border)" }}>
+      <div className="mt-4 flex gap-1 overflow-x-auto border-b px-4 sm:px-6" style={{ borderColor: "var(--border)" }}>
         {TABS.map((t) => (
           <button
             key={t}
-            className="px-4 py-2 text-sm font-medium"
+            className="shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
             style={{
               borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
               color: tab === t ? "var(--text)" : "var(--muted)",

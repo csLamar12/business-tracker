@@ -144,18 +144,19 @@ export default function AppChrome({
           className="glass flex h-14 items-center justify-between px-5"
           style={{ borderBottom: "1px solid var(--border)" }}
         >
-          <div className="display text-lg font-semibold" style={{ color: "var(--accent)" }}>
-            Business Tracker
+          <div className="display shrink-0 whitespace-nowrap text-base font-semibold sm:text-lg" style={{ color: "var(--accent)" }}>
+            <span className="hidden sm:inline">Business Tracker</span>
+            <span className="sm:hidden">Tracker</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
             {user.isAdmin && (
-              <Link href="/admin" className="btn-ghost text-sm">
+              <Link href="/admin" className="btn-ghost px-2 text-sm">
                 Admin
               </Link>
             )}
             <ThemePicker />
             <div className="relative">
-              <button className="btn-ghost" onClick={() => setBellOpen((o) => !o)}>
+              <button className="btn-ghost px-2" onClick={() => setBellOpen((o) => !o)}>
                 🔔
                 {badge > 0 && (
                   <span
@@ -168,7 +169,7 @@ export default function AppChrome({
               </button>
               {bellOpen && (
                 <div
-                  className="glass absolute right-0 z-20 mt-2 w-80 rounded-lg p-3 shadow-xl"
+                  className="glass absolute right-0 z-20 mt-2 w-[calc(100vw-1.5rem)] max-w-sm rounded-lg p-3 shadow-xl sm:w-80"
                   style={{ border: "1px solid var(--border)" }}
                 >
                   {notif?.invites?.length ? (
@@ -212,16 +213,17 @@ export default function AppChrome({
               )}
             </div>
             <span className="flex items-center gap-2 text-sm">
-              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: user.color }} />
-              {user.displayName}
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: user.color }} title={user.displayName} />
+              <span className="hidden sm:inline">{user.displayName}</span>
               {user.isAdmin && (
-                <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "var(--accent)" }}>
+                <span className="hidden rounded px-1.5 py-0.5 text-[10px] font-bold sm:inline" style={{ background: "var(--accent)", color: "#fff" }}>
                   ADMIN
                 </span>
               )}
             </span>
-            <button className="btn-ghost" onClick={logout}>
-              Sign out
+            <button className="btn-ghost px-2" onClick={logout} title="Sign out">
+              <span className="hidden sm:inline">Sign out</span>
+              <span className="sm:hidden">⏻</span>
             </button>
           </div>
         </header>
@@ -229,7 +231,7 @@ export default function AppChrome({
         <main className="flex-1 overflow-hidden">{children}</main>
 
         <footer
-          className="glass flex h-11 items-center gap-2 px-5 text-xs"
+          className="glass flex h-11 items-center gap-2 px-3 text-xs sm:px-5"
           style={{ borderTop: "1px solid var(--border)" }}
         >
           <span style={{ color: "var(--muted)" }}>Display:</span>
@@ -244,7 +246,8 @@ export default function AppChrome({
             </select>
           </div>
           <span className="ml-auto" style={{ color: "var(--muted)" }}>
-            Rate for new entries (JMD per 1 USD):
+            <span className="hidden sm:inline">Rate for new entries (JMD per 1 USD):</span>
+            <span className="sm:hidden">Rate:</span>
           </span>
           <div className="w-24">
             <input

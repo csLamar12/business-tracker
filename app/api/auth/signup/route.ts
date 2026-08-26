@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authService, AuthError } from "@/lib/authService";
 import { setAuthCookies } from "@/lib/auth";
-import { upsertUserOnLogin, toPublicUser } from "@/lib/repositories/users";
+import { upsertUserOnLogin, toPublicUser, isAdminEmail } from "@/lib/repositories/users";
 import { ensureIndexes } from "@/lib/db";
 import { originOk, jsonError } from "@/lib/http";
 
@@ -18,6 +18,11 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return jsonError(400, parsed.error.issues[0]?.message || "Invalid input");
+  }
+  // Public sign-up is closed: only pre-designated admin emails may self-register
+  // (bootstrap). All other accounts are created by an admin.
+  if (!isAdminEmail(parsed.data.email)) {
+    return jsonError(403, "Accounts are created by an admin — ask your admin for access.");
   }
   try {
     await ensureIndexes(); // first-ever write path — make sure unique indexes exist

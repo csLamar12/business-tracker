@@ -9,6 +9,12 @@ function adminEmails(): string[] {
     .filter(Boolean);
 }
 
+/** Only pre-designated admin emails may self-sign-up (bootstrap). Everyone else
+ * is created by an admin. */
+export function isAdminEmail(email: string): boolean {
+  return adminEmails().includes((email || "").toLowerCase());
+}
+
 function baseName(email: string): string {
   const local = email.split("@")[0] || "user";
   const cleaned = local.replace(/[^A-Za-z0-9 ]/g, " ").trim() || "user";

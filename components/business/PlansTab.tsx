@@ -25,6 +25,7 @@ export default function PlansTab({
   const nameById = new Map(users.map((u) => [u.id, u.displayName]));
 
   const [title, setTitle] = useState("");
+  const [startDate, setStartDate] = useState("");
   const [targetDate, setTargetDate] = useState("");
   const [status, setStatus] = useState<PlanStatus>(PLAN_STATUSES[0]);
   const [description, setDescription] = useState("");
@@ -32,11 +33,13 @@ export default function PlansTab({
   async function add() {
     if (!title.trim()) return;
     setTitle("");
+    setStartDate("");
     setTargetDate("");
     setDescription("");
     await apiJson("/api/plans", "POST", {
       businessId,
       title: title.trim(),
+      startDate,
       targetDate,
       status,
       description,
@@ -62,7 +65,11 @@ export default function PlansTab({
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <div>
-          <label className="label">Target date</label>
+          <label className="label">Start goal</label>
+          <input className="input" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Finish goal</label>
           <input className="input" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
         </div>
         <div className="w-36">
@@ -83,7 +90,8 @@ export default function PlansTab({
           <thead>
             <tr style={{ color: "var(--muted)" }} className="text-left">
               <th className="p-2">Title</th>
-              <th className="p-2">Target</th>
+              <th className="p-2">Start</th>
+              <th className="p-2">Finish</th>
               <th className="p-2">Status</th>
               <th className="p-2">Description</th>
               <th className="p-2">By</th>
@@ -94,15 +102,16 @@ export default function PlansTab({
             {rows.map((r) => (
               <tr key={r._id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td className="p-2"><Cell value={r.title} onSave={(v) => edit(r._id, "title", v)} /></td>
+                <td className="p-2 w-28"><Cell value={r.startDate} type="date" onSave={(v) => edit(r._id, "startDate", v)} /></td>
                 <td className="p-2 w-28"><Cell value={r.targetDate} type="date" onSave={(v) => edit(r._id, "targetDate", v)} /></td>
                 <td className="p-2 w-36"><Cell value={r.status} type="select" options={[...PLAN_STATUSES]} onSave={(v) => edit(r._id, "status", v)} /></td>
-                <td className="p-2"><Cell value={r.description} onSave={(v) => edit(r._id, "description", v)} /></td>
+                <td className="p-2 max-w-xs"><Cell value={r.description} expandable onSave={(v) => edit(r._id, "description", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
                 <td className="p-2"><button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)}>✕</button></td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={6} className="p-4 text-center" style={{ color: "var(--muted)" }}>No plans yet.</td></tr>
+              <tr><td colSpan={7} className="p-4 text-center" style={{ color: "var(--muted)" }}>No plans yet.</td></tr>
             )}
           </tbody>
         </table>

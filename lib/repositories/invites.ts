@@ -8,6 +8,7 @@ import {
 } from "./businesses";
 import { getUser } from "./users";
 import { enqueueNotification } from "./notifications";
+import { recordEvent } from "./events";
 import { sendEmail } from "@/lib/mail";
 
 function toInvite(d: InviteDoc, businessName?: string): Invite {
@@ -70,6 +71,14 @@ export async function createInvite(
       `You have been invited to access “${bizName}” in Business Tracker.\n\nOpen the app and click the bell to accept.`,
     );
   }
+  if (!existing) {
+    await recordEvent(
+      inviterSub,
+      "invited",
+      invitee?.displayName ?? inviteeSub,
+      rootId,
+    );
+  }
   return { ok: true };
 }
 
@@ -121,6 +130,7 @@ export async function acceptInvite(inviteId: string, sub: string): Promise<boole
     businessId: inv.businessId.toHexString(),
     createdById: sub,
   });
+  await recordEvent(sub, "accepted an invite", "", inv.businessId.toHexString());
   return true;
 }
 
@@ -134,5 +144,6 @@ export async function declineInvite(inviteId: string, sub: string): Promise<bool
     { _id: oid },
     { $set: { status: "declined", resolvedAt: new Date() } },
   );
+  await recordEvent(sub, "declined an invite", "", inv.businessId.toHexString());
   return true;
 }

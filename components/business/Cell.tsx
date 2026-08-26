@@ -4,15 +4,56 @@ import { useState } from "react";
 
 type CellType = "text" | "number" | "date" | "select";
 
+/** Long text collapses to one line with a small rotating chevron pill that
+ * expands it inline. Double-click the text to edit. */
+function ExpandableText({ value, onEdit }: { value: string; onEdit: () => void }) {
+  const [open, setOpen] = useState(false);
+  const long = value.length > 60 || value.includes("\n");
+  if (!long) {
+    return (
+      <span className="block cursor-pointer truncate" title="Double-click to edit" onDoubleClick={onEdit}>
+        {value}
+      </span>
+    );
+  }
+  return (
+    <div className="flex items-start gap-1.5">
+      <span
+        className={`min-w-0 flex-1 cursor-pointer ${open ? "whitespace-pre-wrap break-words" : "truncate"}`}
+        title="Double-click to edit"
+        onDoubleClick={onEdit}
+      >
+        {value}
+      </span>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label={open ? "Collapse" : "Expand"}
+        title={open ? "Collapse" : "Show more"}
+        className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] transition-transform"
+        style={{
+          background: "var(--accent-soft)",
+          color: "var(--accent)",
+          transform: open ? "rotate(180deg)" : "none",
+        }}
+      >
+        ▾
+      </button>
+    </div>
+  );
+}
+
 export default function Cell({
   value,
   type = "text",
   options,
+  expandable = false,
   onSave,
 }: {
   value: string;
   type?: CellType;
   options?: string[];
+  expandable?: boolean;
   onSave: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -23,16 +64,17 @@ export default function Cell({
     if (v !== value) onSave(v);
   }
 
+  function startEdit() {
+    setV(value);
+    setEditing(true);
+  }
+
   if (!editing) {
+    if (expandable && value) {
+      return <ExpandableText value={value} onEdit={startEdit} />;
+    }
     return (
-      <span
-        className="block cursor-pointer truncate"
-        title="Double-click to edit"
-        onDoubleClick={() => {
-          setV(value);
-          setEditing(true);
-        }}
-      >
+      <span className="block cursor-pointer truncate" title="Double-click to edit" onDoubleClick={startEdit}>
         {value || <span style={{ color: "var(--muted)" }}>—</span>}
       </span>
     );

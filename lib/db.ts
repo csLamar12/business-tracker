@@ -54,6 +54,7 @@ export interface PlanDoc {
   businessId: ObjectId;
   title: string;
   description: string;
+  startDate: string;
   targetDate: string;
   status: PlanStatus;
   createdBy: string;

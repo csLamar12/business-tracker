@@ -60,7 +60,10 @@ async function call<T>(
   if (!res.ok) {
     const detail =
       (data && (data.detail || data.message)) || res.statusText || "auth error";
-    throw new AuthError(res.status, String(detail));
+    const hint = res.redirected
+      ? ` (request was redirected to ${res.url} — set AUTH_SERVICE_URL to the https:// URL with no trailing slash)`
+      : "";
+    throw new AuthError(res.status, String(detail) + hint);
   }
   return data as T;
 }

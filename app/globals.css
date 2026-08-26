@@ -184,3 +184,12 @@ h1, h2, h3, .display {
   box-shadow: var(--shadow-sm);
 }
 .label { @apply mb-1 block text-xs font-medium; color: var(--muted); }
+/* Highlighted @-mention inside displayed notes/descriptions. */
+.mention {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0 3px;
+  white-space: nowrap;
+}

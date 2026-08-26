@@ -1,18 +1,32 @@
 "use client";
 
 import { useState } from "react";
+import MentionText from "../MentionText";
 
 type CellType = "text" | "number" | "date" | "select";
 
+/** Render text, highlighting @-mentions when a name list is supplied. */
+function Body({ text, mentionNames }: { text: string; mentionNames?: string[] }) {
+  return mentionNames ? <MentionText text={text} names={mentionNames} /> : <>{text}</>;
+}
+
 /** Long text collapses to one line with a small rotating chevron pill that
  * expands it inline. Double-click the text to edit. */
-function ExpandableText({ value, onEdit }: { value: string; onEdit: () => void }) {
+function ExpandableText({
+  value,
+  mentionNames,
+  onEdit,
+}: {
+  value: string;
+  mentionNames?: string[];
+  onEdit: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const long = value.length > 60 || value.includes("\n");
   if (!long) {
     return (
       <span className="block cursor-pointer truncate" title="Double-click to edit" onDoubleClick={onEdit}>
-        {value}
+        <Body text={value} mentionNames={mentionNames} />
       </span>
     );
   }
@@ -23,7 +37,7 @@ function ExpandableText({ value, onEdit }: { value: string; onEdit: () => void }
         title="Double-click to edit"
         onDoubleClick={onEdit}
       >
-        {value}
+        <Body text={value} mentionNames={mentionNames} />
       </span>
       <button
         type="button"
@@ -49,6 +63,7 @@ export default function Cell({
   type = "text",
   options,
   expandable = false,
+  mentionNames,
   onSave,
 }: {
   value: string;
@@ -57,6 +72,8 @@ export default function Cell({
   type?: CellType;
   options?: string[];
   expandable?: boolean;
+  /** When set, @-mentions of these names are highlighted in the shown text. */
+  mentionNames?: string[];
   onSave: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -75,11 +92,11 @@ export default function Cell({
 
   if (!editing) {
     if (expandable && value) {
-      return <ExpandableText value={shown} onEdit={startEdit} />;
+      return <ExpandableText value={shown} mentionNames={mentionNames} onEdit={startEdit} />;
     }
     return (
       <span className="block cursor-pointer truncate" title="Double-click to edit" onDoubleClick={startEdit}>
-        {shown || <span style={{ color: "var(--muted)" }}>—</span>}
+        {shown ? <Body text={shown} mentionNames={mentionNames} /> : <span style={{ color: "var(--muted)" }}>—</span>}
       </span>
     );
   }

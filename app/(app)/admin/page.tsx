@@ -19,6 +19,13 @@ interface BizRow {
   owner: string;
   members: number;
 }
+interface BizAccess {
+  id: string;
+  name: string;
+  ownerId: string | null;
+  ownerName: string;
+  memberIds: string[];
+}
 
 export default function AdminPage() {
   const { data, error } = useSWR<{ events: Activity[]; businesses: BizRow[] }>(
@@ -30,10 +37,42 @@ export default function AdminPage() {
     "/api/users",
     jsonFetcher,
   );
+  const { data: access, mutate: mutateAccess } = useSWR<{
+    users: PublicUser[];
+    businesses: BizAccess[];
+  }>("/api/admin/access", jsonFetcher, { refreshInterval: 20000 });
 
   const [newEmail, setNewEmail] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function toggleAccess(biz: BizAccess, user: PublicUser, has: boolean) {
+    const action = has ? "remove" : "add";
+    // optimistic flip
+    mutateAccess(
+      (cur) =>
+        cur && {
+          ...cur,
+          businesses: cur.businesses.map((b) =>
+            b.id === biz.id
+              ? {
+                  ...b,
+                  memberIds: has
+                    ? b.memberIds.filter((id) => id !== user.id)
+                    : [...b.memberIds, user.id],
+                }
+              : b,
+          ),
+        },
+      false,
+    );
+    try {
+      await apiJson("/api/admin/access", "POST", { businessId: biz.id, userId: user.id, action });
+    } catch (err) {
+      setMsg((err as Error).message);
+    }
+    mutateAccess();
+  }
 
   if (error) {
     return (
@@ -123,6 +162,78 @@ export default function AdminPage() {
             <p className="py-2" style={{ color: "var(--muted)" }}>No users yet.</p>
           )}
         </div>
+      </div>
+
+      {/* Access matrix */}
+      <div className="card mb-6">
+        <h2 className="mb-1 text-base font-semibold">Access</h2>
+        <p className="mb-3 text-xs" style={{ color: "var(--muted)" }}>
+          Who can see each top-level business. Subsidiaries inherit their parent&apos;s access.
+          <span className="mx-1" style={{ color: "var(--accent)" }}>★</span> = owner (always has access);
+          tick a box to grant access, untick to remove.
+        </p>
+        {access && access.businesses.length > 0 && access.users.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="text-sm">
+              <thead>
+                <tr style={{ color: "var(--muted)" }}>
+                  <th
+                    className="sticky left-0 z-10 p-2 text-left"
+                    style={{ background: "var(--surface)" }}
+                  >
+                    User
+                  </th>
+                  {access.businesses.map((b) => (
+                    <th key={b.id} className="max-w-32 truncate p-2 text-center font-medium" title={b.name}>
+                      {b.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {access.users.map((u) => (
+                  <tr key={u.id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td
+                      className="sticky left-0 z-10 whitespace-nowrap p-2"
+                      style={{ background: "var(--surface)" }}
+                    >
+                      <span className="font-medium">{u.displayName}</span>
+                      {u.isAdmin && (
+                        <span className="ml-1 rounded px-1 text-[9px] font-bold" style={{ background: "var(--accent)", color: "#fff" }}>
+                          ADMIN
+                        </span>
+                      )}
+                      <span className="ml-1 hidden md:inline" style={{ color: "var(--muted)" }}>{u.email}</span>
+                    </td>
+                    {access.businesses.map((b) => {
+                      const isOwner = b.ownerId === u.id;
+                      const has = b.memberIds.includes(u.id);
+                      return (
+                        <td key={b.id} className="p-2 text-center">
+                          {isOwner ? (
+                            <span title="Owner" style={{ color: "var(--accent)" }}>★</span>
+                          ) : (
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 cursor-pointer align-middle accent-[var(--accent)]"
+                              checked={has}
+                              onChange={() => toggleAccess(b, u, has)}
+                              title={has ? `Remove ${u.displayName}'s access` : `Give ${u.displayName} access`}
+                            />
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm" style={{ color: "var(--muted)" }}>
+            {access ? "No businesses to manage yet." : "Loading…"}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">

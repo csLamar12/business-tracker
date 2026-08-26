@@ -241,7 +241,7 @@ export default function TransactionsTab({
                 <td className="p-2 w-20"><Cell value={r.currency} type="select" options={["USD", "JMD"]} onSave={(v) => edit(r._id, "currency", v)} /></td>
                 <td className="p-2 w-20"><Cell value={String(r.fxRate)} type="number" onSave={(v) => edit(r._id, "fxRate", v)} /></td>
                 <td className="p-2 whitespace-nowrap">{fmtMoney(convert(r.amount, r.currency, display, r.fxRate || fxRate), display)}</td>
-                <td className="p-2 max-w-48"><Cell value={r.notes} expandable onSave={(v) => edit(r._id, "notes", v)} /></td>
+                <td className="p-2 max-w-48"><Cell value={r.notes} expandable mentionNames={names} onSave={(v) => edit(r._id, "notes", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
                 <td className="p-2 text-right align-top whitespace-nowrap">
                   <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)} title="Delete entry">✕</button>

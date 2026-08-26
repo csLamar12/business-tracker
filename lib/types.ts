@@ -25,7 +25,7 @@ export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
 export type TxnType = "income" | "expense";
 
-export type NotificationKind = "mention" | "invite" | "invite_accepted";
+export type NotificationKind = "mention" | "invite" | "invite_accepted" | "access_granted";
 export type InviteStatus = "pending" | "accepted" | "declined";
 
 // ── Stored documents (Mongo). ids are strings in the API layer. ──────────────

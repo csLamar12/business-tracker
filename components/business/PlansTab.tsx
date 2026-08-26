@@ -128,7 +128,7 @@ export default function PlansTab({
                 <td className="p-2 w-28"><Cell value={r.startDate} type="date" onSave={(v) => edit(r._id, "startDate", v)} /></td>
                 <td className="p-2 w-28"><Cell value={r.targetDate} type="date" onSave={(v) => edit(r._id, "targetDate", v)} /></td>
                 <td className="p-2 w-36"><Cell value={r.status} type="select" options={[...PLAN_STATUSES]} onSave={(v) => edit(r._id, "status", v)} /></td>
-                <td className="p-2 max-w-xs"><Cell value={r.description} expandable onSave={(v) => edit(r._id, "description", v)} /></td>
+                <td className="p-2 max-w-xs"><Cell value={r.description} expandable mentionNames={names} onSave={(v) => edit(r._id, "description", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
                 <td className="p-2 text-right align-top whitespace-nowrap">
                   <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)} title="Delete plan">✕</button>

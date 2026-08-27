@@ -100,6 +100,11 @@ export async function setDisplayName(
   return { ok: true };
 }
 
+/** Suspend (read-only) or restore an account. */
+export async function setSuspended(sub: string, suspended: boolean) {
+  await (await col.users()).updateOne({ _id: sub }, { $set: { suspended } });
+}
+
 export async function setDisplayCurrency(sub: string, currency: Currency) {
   await (await col.users()).updateOne(
     { _id: sub },
@@ -114,6 +119,32 @@ export async function touchPresence(sub: string) {
   );
 }
 
+/**
+ * Remove a deleted user's tracker-side footprint: memberships, their
+ * notifications, invites either way, and mention dedupe state.
+ *
+ * Transactions and plans are deliberately KEPT. They are financial records that
+ * belong to the business, not the author; `createdBy` simply stops resolving to
+ * a name. Callers must have already established that the user owns no
+ * businesses (see listOwnedBusinesses).
+ */
+export async function purgeUserData(sub: string): Promise<void> {
+  const [businesses, notifications, invites, mentionState, users] = await Promise.all([
+    col.businesses(),
+    col.notifications(),
+    col.invites(),
+    col.mentionState(),
+    col.users(),
+  ]);
+  await Promise.all([
+    businesses.updateMany({ memberIds: sub }, { $pull: { memberIds: sub } }),
+    notifications.deleteMany({ recipientId: sub }),
+    invites.deleteMany({ $or: [{ inviteeId: sub }, { inviterId: sub }] }),
+    mentionState.deleteMany({ userId: sub }),
+  ]);
+  await users.deleteOne({ _id: sub });
+}
+
 export function toPublicUser(u: UserDoc): PublicUser {
   return {
     id: u._id,
@@ -123,6 +154,7 @@ export function toPublicUser(u: UserDoc): PublicUser {
     color: u.color,
     displayCurrency: u.displayCurrency,
     isAdmin: u.isAdmin,
+    suspended: !!u.suspended,
     online: isOnline(u.lastSeenAt ? u.lastSeenAt.toISOString() : null),
   };
 }

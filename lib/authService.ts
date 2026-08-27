@@ -114,6 +114,16 @@ export const authService = {
       appId: true,
     }),
 
+  // Ops-only delete of another account. Authorised by the acting admin's own
+  // access token — anchor-auth checks their email against ANCHOR_AUTH_OPS_EMAILS,
+  // so this can't be called with a service-wide secret.
+  adminDeleteUser: (email: string, accessToken: string) =>
+    call<{ deleted: boolean; email: string }>("/admin/delete-user", {
+      body: { email },
+      bearer: accessToken,
+      appId: true,
+    }),
+
   resetPassword: (email: string, code: string, newPassword: string) =>
     call<{ message: string }>("/reset-password", {
       body: { email, code, new_password: newPassword },

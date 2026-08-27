@@ -4,6 +4,7 @@ import { requireUser, requireMutation, isResponse, jsonError } from "@/lib/http"
 import {
   getBusiness,
   hasAccess,
+  rootBusinessId,
   renameBusiness,
   updatePhase,
   deleteBusiness,
@@ -95,10 +96,31 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 }
 
 export async function DELETE(req: NextRequest, { params }: Params) {
-  const ctx = await requireMutation(req);
+  // The one mutation a read-only account keeps: clearing the businesses it owns
+  // is precisely what makes the account deletable.
+  const ctx = await requireMutation(req, { allowSuspended: true });
   if (isResponse(ctx)) return ctx;
   const { id } = await params;
   if (!(await hasAccess(id, ctx.sub, ctx.isAdmin))) return jsonError(403, "No access");
+  // Deleting removes the business, its subsidiaries, and EVERY transaction and
+  // plan beneath them, so it is owner-only — deliberately narrower than
+  // hasAccess, which admits members. A member may edit entries but must not be
+  // able to wipe someone else's records, and this is also what makes the
+  // "still owns businesses" block on account deletion mean anything.
+  const rootId = await rootBusinessId(id);
+  const root = rootId ? await getBusiness(rootId) : null;
+  if (!root) return jsonError(404, "No such business");
+  const isOwner = root.ownerId === ctx.sub;
+  // A suspended owner keeps this power (it is how they become deletable), but a
+  // suspended account never inherits the admin override.
+  if (!isOwner && (ctx.suspended || !ctx.isAdmin)) {
+    return jsonError(
+      403,
+      ctx.suspended
+        ? "Read-only account: you can only delete businesses you own."
+        : "Only the owner can delete this business.",
+    );
+  }
   await deleteBusiness(id);
   return NextResponse.json({ ok: true });
 }

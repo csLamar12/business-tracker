@@ -112,6 +112,8 @@ export interface PublicUser {
   color: string;
   displayCurrency: Currency;
   isAdmin: boolean;
+  /** Read-only account: may view, but not change data. */
+  suspended: boolean;
   online?: boolean;
 }
 

@@ -27,7 +27,9 @@ export async function GET() {
 const seenSchema = z.object({ ids: z.array(z.string()).max(200) });
 
 export async function POST(req: NextRequest) {
-  const ctx = await requireMutation(req);
+  // Marking your own notifications seen is a read affordance; blocking it
+  // would replay the same toasts forever.
+  const ctx = await requireMutation(req, { allowSuspended: true });
   if (isResponse(ctx)) return ctx;
   const parsed = seenSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(400, "Invalid input");

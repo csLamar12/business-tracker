@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
 import { jsonFetcher, apiJson } from "@/lib/apiClient";
+import Modal from "@/components/Modal";
 import type { PublicUser } from "@/lib/types";
 
 interface Activity {
@@ -45,6 +46,40 @@ export default function AdminPage() {
   const [newEmail, setNewEmail] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [delTarget, setDelTarget] = useState<PublicUser | null>(null);
+  const [delTyped, setDelTyped] = useState("");
+  const [delErr, setDelErr] = useState("");
+  const [delBusy, setDelBusy] = useState(false);
+
+  async function toggleSuspend(u: PublicUser) {
+    const to = !u.suspended;
+    if (to && !confirm(`Make ${u.displayName}'s account read-only? They'll still see everything, and can delete businesses they own.`)) return;
+    setMsg("");
+    try {
+      await apiJson(`/api/admin/users/${u.id}/suspend`, "POST", { suspended: to });
+      setMsg(to ? `${u.displayName} is now read-only.` : `${u.displayName} can edit again.`);
+      mutateUsers();
+    } catch (err) {
+      setMsg((err as Error).message);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!delTarget) return;
+    setDelBusy(true);
+    setDelErr("");
+    try {
+      await apiJson(`/api/admin/users/${delTarget.id}`, "DELETE", { email: delTyped.trim() });
+      setMsg(`Deleted ${delTarget.email}.`);
+      setDelTarget(null);
+      setDelTyped("");
+      mutateUsers();
+      mutateAccess();
+    } catch (err) {
+      setDelErr((err as Error).message);
+    }
+    setDelBusy(false);
+  }
 
   async function toggleAccess(biz: BizAccess, user: PublicUser, has: boolean) {
     const action = has ? "remove" : "add";
@@ -158,10 +193,35 @@ export default function AdminPage() {
                   ADMIN
                 </span>
               )}
+              {u.suspended && (
+                <span
+                  className="rounded px-1.5 py-0.5 text-[10px] font-bold"
+                  style={{ background: "var(--red)", color: "#fff" }}
+                  title="Read-only: can view, and delete businesses they own"
+                >
+                  READ-ONLY
+                </span>
+              )}
               <span style={{ color: "var(--muted)" }}>{u.email}</span>
-              <button className="btn-ghost ml-auto text-xs" onClick={() => reset(u)}>
-                Reset password
-              </button>
+              <span className="ml-auto flex shrink-0 items-center gap-1">
+                <button className="btn-ghost text-xs" onClick={() => reset(u)}>
+                  Reset password
+                </button>
+                <button className="btn-ghost text-xs" onClick={() => toggleSuspend(u)}>
+                  {u.suspended ? "Restore" : "Suspend"}
+                </button>
+                <button
+                  className="btn-ghost text-xs"
+                  style={{ color: "var(--red-text)" }}
+                  onClick={() => {
+                    setDelTarget(u);
+                    setDelTyped("");
+                    setDelErr("");
+                  }}
+                >
+                  Delete
+                </button>
+              </span>
             </div>
           ))}
           {users.length === 0 && (
@@ -273,6 +333,47 @@ export default function AdminPage() {
           </div>
         </div>
       </div>
+
+      {delTarget && (
+        <Modal title="Delete account" onClose={() => setDelTarget(null)}>
+          <p className="text-sm">
+            This permanently deletes <b>{delTarget.displayName}</b> and their sign-in.
+            Entries they added stay with the business. This can&apos;t be undone.
+          </p>
+          <p className="mt-3 text-sm" style={{ color: "var(--muted)" }}>
+            Type <b style={{ color: "var(--text)" }}>{delTarget.email}</b> to confirm:
+          </p>
+          <input
+            className="input mt-1"
+            autoFocus
+            value={delTyped}
+            placeholder={delTarget.email}
+            onChange={(e) => setDelTyped(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && delTyped.trim().toLowerCase() === delTarget.email.toLowerCase()) {
+                confirmDelete();
+              }
+            }}
+          />
+          {delErr && (
+            <p className="mt-2 text-sm" style={{ color: "var(--red-text)" }}>{delErr}</p>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <button className="btn-ghost" onClick={() => setDelTarget(null)}>Cancel</button>
+            <button
+              className="btn-danger px-3 py-1.5"
+              disabled={delBusy || delTyped.trim().toLowerCase() !== delTarget.email.toLowerCase()}
+              style={{
+                opacity:
+                  delBusy || delTyped.trim().toLowerCase() !== delTarget.email.toLowerCase() ? 0.5 : 1,
+              }}
+              onClick={confirmDelete}
+            >
+              {delBusy ? "Deleting…" : "Delete account"}
+            </button>
+          </div>
+        </Modal>
+      )}
       </div>
     </div>
   );

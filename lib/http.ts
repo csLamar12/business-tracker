@@ -6,7 +6,12 @@ import type { Session } from "./types";
 export interface Ctx {
   sub: string;
   isAdmin: boolean;
+  /** Read-only account: may view, but not change data. */
+  suspended: boolean;
 }
+
+export const SUSPENDED_MESSAGE =
+  "Your account is read-only. An admin suspended it — you can still view everything, and delete businesses you own.";
 
 /** Authenticated caller context (with tracker-side isAdmin), or a 401. */
 export async function requireUser(): Promise<Ctx | NextResponse> {
@@ -14,13 +19,30 @@ export async function requireUser(): Promise<Ctx | NextResponse> {
   if (!s) return jsonError(401, "Not authenticated");
   const u = await getUser(s.sub);
   if (!u) return jsonError(401, "No profile");
-  return { sub: s.sub, isAdmin: u.isAdmin };
+  return { sub: s.sub, isAdmin: u.isAdmin, suspended: !!u.suspended };
 }
 
-/** Same-origin + authenticated context for mutating routes, or a 401/403. */
-export async function requireMutation(req: NextRequest): Promise<Ctx | NextResponse> {
+/**
+ * Same-origin + authenticated context for mutating routes, or a 401/403.
+ *
+ * Suspended (read-only) accounts are rejected here, which is the single
+ * chokepoint every mutating route already passes through. `allowSuspended` opts
+ * a route out, and is reserved for actions a read-only user must still perform:
+ * deleting their own businesses (the way they become deletable), the presence
+ * heartbeat, and marking notifications seen — blocking those would spam 403s
+ * and strand them, without protecting any data.
+ */
+export async function requireMutation(
+  req: NextRequest,
+  opts: { allowSuspended?: boolean } = {},
+): Promise<Ctx | NextResponse> {
   if (!originOk(req)) return jsonError(403, "Bad origin");
-  return requireUser();
+  const ctx = await requireUser();
+  if (isResponse(ctx)) return ctx;
+  if (ctx.suspended && !opts.allowSuspended) {
+    return jsonError(403, SUSPENDED_MESSAGE);
+  }
+  return ctx;
 }
 
 /** CSRF: allow same-origin (+ an optional allowlist), reject cross-site. */

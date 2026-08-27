@@ -228,6 +228,16 @@ export default function AppChrome({
           </div>
         </header>
 
+        {user.suspended && (
+          <div
+            className="px-4 py-1.5 text-center text-xs font-medium"
+            style={{ background: "var(--red)", color: "#fff" }}
+          >
+            Your account is read-only — an admin suspended it. You can view everything, and
+            delete businesses you own.
+          </div>
+        )}
+
         <main className="flex-1 overflow-hidden">{children}</main>
 
         <footer

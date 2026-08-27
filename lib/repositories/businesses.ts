@@ -32,6 +32,17 @@ export async function listTopLevelFor(
   return docs.map(toBusiness);
 }
 
+/** Top-level businesses this user OWNS (not merely a member of). Deleting a
+ * user is blocked while this is non-empty so their financial data is never
+ * destroyed as a side effect of removing an account. */
+export async function listOwnedBusinesses(sub: string): Promise<Business[]> {
+  const docs = await (await col.businesses())
+    .find({ parentId: null, ownerId: sub })
+    .sort({ name: 1 })
+    .toArray();
+  return docs.map(toBusiness);
+}
+
 export async function listSubsidiaries(parentId: string): Promise<Business[]> {
   const oid = toObjectId(parentId);
   if (!oid) return [];

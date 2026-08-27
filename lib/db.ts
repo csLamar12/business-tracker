@@ -20,6 +20,8 @@ export interface UserDoc {
   displayCurrency: Currency;
   lastSeenAt: Date | null;
   isAdmin: boolean;
+  /** Read-only account: may view, but not change data. Absent = active. */
+  suspended?: boolean;
   createdAt: Date;
 }
 

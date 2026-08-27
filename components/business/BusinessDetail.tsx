@@ -60,7 +60,15 @@ export default function BusinessDetail({
   }
   async function del() {
     if (!confirm(`Delete “${business.name}”? This removes its data${business.parentId ? "" : " and all subsidiaries"}.`)) return;
-    await apiJson(`/api/businesses/${id}`, "DELETE").catch(() => {});
+    try {
+      await apiJson(`/api/businesses/${id}`, "DELETE");
+    } catch (e) {
+      // Don't deselect on failure: swallowing this made a refused delete (403
+      // for a non-owner or a read-only account) look like it had succeeded,
+      // since the pane emptied and the business then reappeared.
+      alert((e as Error).message || "Could not delete this business.");
+      return;
+    }
     onDeleted();
     window.dispatchEvent(new Event("bt:refresh-businesses"));
   }

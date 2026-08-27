@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { randomBytes } from "crypto";
 import { requireMutation, isResponse, jsonError } from "@/lib/http";
+import { readAuthCookies } from "@/lib/auth";
 import { authService, AuthError } from "@/lib/authService";
 import { upsertUserOnLogin } from "@/lib/repositories/users";
 import { recordEvent } from "@/lib/repositories/events";
@@ -46,10 +47,23 @@ export async function POST(req: NextRequest) {
       return jsonError(500, "Create failed");
     }
   }
-  // Send the set-password code email (best-effort).
+  // Send the ONBOARDING email (best-effort) — not the reset email. A brand-new
+  // user has no password and never asked for a reset, so "password reset code"
+  // reads as a mistake or a phishing attempt. Falls back to the reset email if
+  // the auth service is older than /admin/send-welcome, so a deploy-order skew
+  // still gets them a usable code.
+  const { access } = await readAuthCookies();
   try {
-    await authService.forgotPassword(email);
-  } catch {}
+    if (access) {
+      await authService.sendWelcome(email, access);
+    } else {
+      await authService.forgotPassword(email);
+    }
+  } catch {
+    try {
+      await authService.forgotPassword(email);
+    } catch {}
+  }
   await recordEvent(ctx.sub, existed ? "resent set-password code" : "created user", email);
   return NextResponse.json({ ok: true, existed });
 }

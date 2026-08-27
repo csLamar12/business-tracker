@@ -124,6 +124,16 @@ export const authService = {
       appId: true,
     }),
 
+  // Onboarding counterpart to forgotPassword: same code mechanism, but the
+  // recipient gets a "welcome, choose a password" email rather than a
+  // "password reset" one they never asked for.
+  sendWelcome: (email: string, accessToken: string) =>
+    call<{ message: string }>("/admin/send-welcome", {
+      body: { email },
+      bearer: accessToken,
+      appId: true,
+    }),
+
   resetPassword: (email: string, code: string, newPassword: string) =>
     call<{ message: string }>("/reset-password", {
       body: { email, code, new_password: newPassword },

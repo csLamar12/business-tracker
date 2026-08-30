@@ -114,23 +114,35 @@ export async function materializeDue(businessId: string): Promise<number> {
   for (const rule of rules) {
     const start = parseDateUtc(rule.startDate);
     if (!start) continue;
-    const { due, next } = occurrencesFrom(start, rule.period, rule.interval, now);
+
+    // How far this rule has ever generated. Comparing against rows that still
+    // EXIST would resurrect anything the user deleted on the very next read, so
+    // the mark is stored on the rule and only ever moves forward. Rules created
+    // before the mark existed are backfilled from their newest row once.
+    let highWater: Date | null = rule.lastOccurrenceAt ?? null;
+    if (!highWater) {
+      const newest = await txns
+        .find({ recurrenceId: rule._id }, { projection: { occurrenceAt: 1 } })
+        .sort({ occurrenceAt: -1 })
+        .limit(1)
+        .toArray();
+      highWater = newest[0]?.occurrenceAt ?? null;
+    }
+
+    const { due, next } = occurrencesFrom(
+      start,
+      rule.period,
+      rule.interval,
+      now,
+      500,
+      highWater,
+    );
     // "Today + next upcoming": everything already due, and one ahead so the
     // user can see what's coming without the table filling with projections.
-    const wanted = next ? [...due, next] : due;
-    if (!wanted.length) continue;
-
-    const existing = await txns
-      .find(
-        { recurrenceId: rule._id },
-        { projection: { occurrenceAt: 1 } },
-      )
-      .toArray();
-    const seen = new Set(
-      existing.map((e) => (e.occurrenceAt ? e.occurrenceAt.getTime() : 0)),
-    );
-
-    const fresh = wanted.filter((d) => !seen.has(d.getTime()));
+    const fresh =
+      next && (!highWater || next.getTime() > highWater.getTime())
+        ? [...due, next]
+        : due;
     if (!fresh.length) continue;
 
     const docs = fresh.map((when) => ({
@@ -160,8 +172,55 @@ export async function materializeDue(businessId: string): Promise<number> {
       if (code !== 11000 && !writeErrors) throw e;
       created += (e as { result?: { nInserted?: number } }).result?.nInserted ?? 0;
     }
+
+    // Advance the mark even if some inserts lost a race — those occurrences
+    // exist either way, and leaving the mark behind would re-offer them.
+    const furthest = fresh[fresh.length - 1];
+    await (await col.recurrences()).updateOne(
+      { _id: rule._id },
+      { $set: { lastOccurrenceAt: furthest } },
+    );
   }
   return created;
+}
+
+/**
+ * Push an edit made on one occurrence out to the rest of the series.
+ *
+ * Only ever called for a row that is still PENDING. A confirmed occurrence is a
+ * record of money that already moved, so editing one of those is a correction to
+ * that instance alone and must not rewrite the others.
+ *
+ * Editing the date re-anchors the schedule: the rule's start moves, every
+ * unconfirmed occurrence is dropped, and the series regenerates from the new
+ * date on the next read. Confirmed rows are history and stay where they are.
+ */
+export async function applyToSeries(
+  recurrenceId: string,
+  field: string,
+  value: unknown,
+): Promise<void> {
+  const rid = toObjectId(recurrenceId);
+  if (!rid) return;
+  const recs = await col.recurrences();
+  const txns = await col.transactions();
+
+  if (field === "date") {
+    const ymd = String(value);
+    if (!parseDateUtc(ymd)) return;
+    await recs.updateOne(
+      { _id: rid },
+      { $set: { startDate: ymd, lastOccurrenceAt: null } },
+    );
+    await txns.deleteMany({ recurrenceId: rid, pending: true });
+    return;
+  }
+  if (!["label", "amount", "currency", "notes"].includes(field)) return;
+  await recs.updateOne({ _id: rid }, { $set: { [field]: value } });
+  await txns.updateMany(
+    { recurrenceId: rid, pending: true },
+    { $set: { [field]: value } },
+  );
 }
 
 /** Tick / untick a generated occurrence. */

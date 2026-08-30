@@ -84,17 +84,29 @@ export function occurrencesFrom(
   interval: number,
   through: Date,
   cap = 500,
+  after: Date | null = null,
 ): { due: Date[]; next: Date | null; capped: boolean } {
   const step = Math.max(1, Math.floor(interval || 1));
   const due: Date[] = [];
+  // Occurrences at or before `after` are already accounted for. Skipping them
+  // rather than re-emitting is what lets a deleted entry STAY deleted: the
+  // caller advances `after` past everything it has ever produced, so nothing
+  // regenerates just because the row is no longer in the table.
+  const afterMs = after ? after.getTime() : -Infinity;
   let i = 0;
   let cur = start;
+  let guard = 0;
   while (cur.getTime() <= through.getTime()) {
-    due.push(cur);
-    if (due.length >= cap) {
-      // Report the next one relative to where we stopped, so a later pass picks
-      // up exactly where this one left off.
-      return { due, next: addPeriods(start, period, (i + 1) * step), capped: true };
+    // Stepping is cheap but unbounded for a sub-daily rule anchored years back;
+    // this keeps a pathological rule from spinning the event loop.
+    if (++guard > 200_000) return { due, next: cur, capped: true };
+    if (cur.getTime() > afterMs) {
+      due.push(cur);
+      if (due.length >= cap) {
+        // Report the next one relative to where we stopped, so a later pass
+        // picks up exactly where this one left off.
+        return { due, next: addPeriods(start, period, (i + 1) * step), capped: true };
+      }
     }
     i += 1;
     cur = addPeriods(start, period, i * step); // always from the anchor

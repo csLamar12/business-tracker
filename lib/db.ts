@@ -70,6 +70,9 @@ export interface RecurrenceDoc {
   interval: number; // every N periods
   startDate: string; // YYYY-MM-DD anchor
   active: boolean;
+  /** Furthest occurrence ever generated. Generation only ever moves forward from
+   * here, so deleting a materialised row does not bring it back. */
+  lastOccurrenceAt?: Date | null;
   createdBy: string;
   createdAt: Date;
 }

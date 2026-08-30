@@ -176,6 +176,24 @@ export default function TransactionsTab({
     onChanged();
   }
 
+  // Copy a row as a fresh one-off entry. Deliberately drops any link to a
+  // recurring rule: a duplicate is a new, independent entry, not another
+  // occurrence of the schedule (which would be a second row the rule doesn't
+  // know about and can't clean up).
+  async function duplicate(r: Transaction) {
+    await apiJson("/api/transactions", "POST", {
+      businessId,
+      type,
+      date: r.date,
+      label: r.label,
+      amount: r.amount,
+      currency: r.currency,
+      notes: r.notes,
+    }).catch(() => {});
+    mutate();
+    onChanged();
+  }
+
   async function del(id: string) {
     if (!confirm("Delete this entry?")) return;
     await apiJson(`/api/transactions/${id}`, "DELETE").catch(() => {});
@@ -354,6 +372,13 @@ export default function TransactionsTab({
                 <td className="p-2 max-w-48"><Cell value={r.notes} expandable mentionNames={names} onSave={(v) => edit(r._id, "notes", v)} /></td>
                 <td className="p-2" style={{ color: "var(--muted)" }}>{nameById.get(r.createdBy) ?? "—"}</td>
                 <td className="p-2 text-right align-top whitespace-nowrap">
+                  <button
+                    className="btn-ghost px-2 py-0.5 text-xs"
+                    onClick={() => duplicate(r)}
+                    title="Duplicate as a new one-off entry"
+                  >
+                    ⧉
+                  </button>
                   <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => del(r._id)} title="Delete entry">✕</button>
                   <div
                     className="mt-1 text-[10px] leading-none"

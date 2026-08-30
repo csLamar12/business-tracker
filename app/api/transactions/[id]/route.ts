@@ -8,7 +8,7 @@ import {
   deleteTransaction,
 } from "@/lib/repositories/transactions";
 import { processMentions } from "@/lib/repositories/mentions";
-import { setPending } from "@/lib/repositories/recurrences";
+import { setPending, applyToSeries, materializeDue } from "@/lib/repositories/recurrences";
 
 export const runtime = "nodejs";
 
@@ -40,6 +40,19 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const ok = await updateTransaction(id, parsed.data.field, parsed.data.value);
   if (!ok) return jsonError(400, "Field not editable");
+
+  // An edit to a still-pending occurrence is an edit to the schedule, so carry
+  // it across the series — otherwise changing the date of one row leaves every
+  // sibling on the old one. Confirmed occurrences are left alone: that money has
+  // already moved, and rewriting it would falsify the record.
+  if (txn.recurrenceId && txn.pending) {
+    await applyToSeries(txn.recurrenceId, parsed.data.field, parsed.data.value);
+    if (parsed.data.field === "date") {
+      // The re-anchor dropped the unconfirmed rows; rebuild them straight away
+      // so the table reflects the new schedule on this response.
+      await materializeDue(txn.businessId).catch(() => {});
+    }
+  }
   if (parsed.data.field === "notes") {
     await processMentions(txn.type, id, "notes", String(parsed.data.value), txn.businessId, ctx.sub);
   }

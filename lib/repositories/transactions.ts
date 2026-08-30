@@ -20,6 +20,9 @@ function toTxn(d: TransactionDoc): Transaction {
     notes: d.notes,
     createdBy: d.createdBy,
     createdAt: d.createdAt.toISOString(),
+    recurrenceId: d.recurrenceId ? d.recurrenceId.toHexString() : null,
+    pending: !!d.pending,
+    occurrenceAt: d.occurrenceAt ? d.occurrenceAt.toISOString() : null,
   };
 }
 

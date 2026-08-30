@@ -49,6 +49,29 @@ export interface TransactionDoc {
   notes: string;
   createdBy: string;
   createdAt: Date;
+  /** Set on rows generated from a recurring rule. */
+  recurrenceId?: ObjectId | null;
+  /** The exact scheduled instant this row materialises (dedupe key). */
+  occurrenceAt?: Date;
+  /** Generated but not yet confirmed. Pending rows are EXCLUDED from totals. */
+  pending?: boolean;
+}
+
+export interface RecurrenceDoc {
+  _id: ObjectId;
+  businessId: ObjectId;
+  type: TxnType;
+  label: string;
+  amount: number;
+  currency: Currency;
+  fxRate: number; // locked at creation, like a transaction
+  notes: string;
+  period: "hourly" | "daily" | "weekly" | "monthly" | "yearly";
+  interval: number; // every N periods
+  startDate: string; // YYYY-MM-DD anchor
+  active: boolean;
+  createdBy: string;
+  createdAt: Date;
 }
 
 export interface PlanDoc {
@@ -143,6 +166,8 @@ export const col = {
     (await getDb()).collection<MentionStateDoc>("mentionState"),
   settings: async () => (await getDb()).collection<SettingsDoc>("settings"),
   events: async () => (await getDb()).collection<EventDoc>("events"),
+  recurrences: async () =>
+    (await getDb()).collection<RecurrenceDoc>("recurrences"),
 };
 
 export function toObjectId(id: string): ObjectId | null {
@@ -163,6 +188,14 @@ export async function ensureIndexes(): Promise<void> {
     db.collection("transactions").createIndex({ businessId: 1, date: -1 }),
     db.collection("transactions").createIndex({ businessId: 1, type: 1 }),
     db.collection("plans").createIndex({ businessId: 1 }),
+    // One row per (rule, scheduled instant). This is what makes materialising
+    // due occurrences idempotent — two concurrent readers race to insert and
+    // the loser's duplicate is rejected rather than double-billing the user.
+    db.collection("transactions").createIndex(
+      { recurrenceId: 1, occurrenceAt: 1 },
+      { unique: true, partialFilterExpression: { recurrenceId: { $type: "objectId" } } },
+    ),
+    db.collection("recurrences").createIndex({ businessId: 1, active: 1 }),
     db.collection("invites").createIndex(
       { businessId: 1, inviteeId: 1 },
       { unique: true, partialFilterExpression: { status: "pending" } },

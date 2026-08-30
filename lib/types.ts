@@ -66,6 +66,29 @@ export interface Transaction {
   notes: string;
   createdBy: string;
   createdAt: string;
+  /** Set when this row came from a recurring rule. */
+  recurrenceId?: string | null;
+  /** Generated but not yet confirmed — excluded from totals until ticked. */
+  pending?: boolean;
+  /** Scheduled instant, ISO. Carries the time for sub-daily periods. */
+  occurrenceAt?: string | null;
+}
+
+export interface Recurrence {
+  _id: string;
+  businessId: string;
+  type: TxnType;
+  label: string;
+  amount: number;
+  currency: Currency;
+  fxRate: number;
+  notes: string;
+  period: "hourly" | "daily" | "weekly" | "monthly" | "yearly";
+  interval: number;
+  startDate: string;
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
 }
 
 export interface Plan {

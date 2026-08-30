@@ -8,6 +8,7 @@ import {
   deleteTransaction,
 } from "@/lib/repositories/transactions";
 import { processMentions } from "@/lib/repositories/mentions";
+import { setPending } from "@/lib/repositories/recurrences";
 
 export const runtime = "nodejs";
 
@@ -15,7 +16,7 @@ type Params = { params: Promise<{ id: string }> };
 
 const patchSchema = z.object({
   field: z.string(),
-  value: z.union([z.string(), z.number()]),
+  value: z.union([z.string(), z.number(), z.boolean()]),
 });
 
 export async function PATCH(req: NextRequest, { params }: Params) {
@@ -27,6 +28,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!(await hasAccess(txn.businessId, ctx.sub, ctx.isAdmin))) return jsonError(403, "No access");
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(400, "Invalid input");
+
+  // Ticking a recurring occurrence confirms the money actually moved, which is
+  // what admits it to the totals. Handled apart from the editable-field
+  // whitelist so `pending` can't be set on an ordinary one-off row.
+  if (parsed.data.field === "pending") {
+    const ok = await setPending(id, parsed.data.value === true || parsed.data.value === "true");
+    if (!ok) return jsonError(400, "Not a recurring entry");
+    return NextResponse.json({ ok: true });
+  }
+
   const ok = await updateTransaction(id, parsed.data.field, parsed.data.value);
   if (!ok) return jsonError(400, "Field not editable");
   if (parsed.data.field === "notes") {

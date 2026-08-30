@@ -129,6 +129,7 @@ export async function deleteBusiness(id: string) {
     (await col.plans()).deleteMany({ businessId: { $in: ids } }),
     (await col.invites()).deleteMany({ businessId: { $in: ids } }),
     (await col.notifications()).deleteMany({ businessId: { $in: ids } }),
+    (await col.recurrences()).deleteMany({ businessId: { $in: ids } }),
     businesses.deleteMany({ _id: { $in: ids } }),
   ]);
 }
@@ -183,7 +184,9 @@ async function sumFor(
   if (!businessIds.length) return { income: 0, expenses: 0 };
   const rows = await (await col.transactions())
     .find(
-      { businessId: { $in: businessIds } },
+      // pending = a recurring occurrence the user hasn't ticked off yet. It is
+      // scheduled money, not moved money, so it must not reach any total.
+      { businessId: { $in: businessIds }, pending: { $ne: true } },
       { projection: { type: 1, amount: 1, currency: 1, fxRate: 1 } },
     )
     .toArray();
@@ -241,7 +244,7 @@ export async function monthlyTrend(
   const ids = [rootOid, ...subs.map((s) => new ObjectId(s._id))];
   const rows = await (await col.transactions())
     .find(
-      { businessId: { $in: ids } },
+      { businessId: { $in: ids }, pending: { $ne: true } },
       { projection: { type: 1, amount: 1, currency: 1, fxRate: 1, date: 1 } },
     )
     .toArray();

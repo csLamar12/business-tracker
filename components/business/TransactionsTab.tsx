@@ -9,7 +9,8 @@ import { toCsv, parseCsv, downloadCsv } from "@/lib/csv";
 import MentionInput from "../MentionInput";
 import AutocompleteInput from "../AutocompleteInput";
 import Cell from "./Cell";
-import type { Currency, PublicUser, Transaction, TxnType } from "@/lib/types";
+import { PERIODS, PERIOD_LABEL } from "@/lib/recurrence";
+import type { Currency, PublicUser, Recurrence, Transaction, TxnType } from "@/lib/types";
 
 export default function TransactionsTab({
   businessId,
@@ -71,6 +72,29 @@ export default function TransactionsTab({
   const [currency, setCurrency] = useState<Currency>(display);
   const [notes, setNotes] = useState("");
   const [query, setQuery] = useState("");
+  const [repeat, setRepeat] = useState<"" | (typeof PERIODS)[number]>("");
+
+  const { data: recData, mutate: mutateRec } = useSWR<{ recurrences: Recurrence[] }>(
+    `/api/recurrences?businessId=${businessId}&type=${type}`,
+    jsonFetcher,
+    { refreshInterval: 30000 },
+  );
+  const rules = recData?.recurrences ?? [];
+
+  async function stopRule(r: Recurrence) {
+    if (!confirm(`Stop repeating "${r.label}"? Entries already created stay.`)) return;
+    await apiJson(`/api/recurrences/${r._id}`, "DELETE").catch(() => {});
+    mutateRec();
+    mutate();
+  }
+
+  // Ticking confirms the money actually moved; only then does it reach totals.
+  async function confirmOccurrence(id: string, pending: boolean) {
+    await apiJson(`/api/transactions/${id}`, "PATCH", { field: "pending", value: pending })
+      .catch(() => {});
+    mutate();
+    onChanged();
+  }
 
   const filtered = query
     ? rows.filter(
@@ -128,6 +152,8 @@ export default function TransactionsTab({
     setLabel("");
     setAmount("");
     setNotes("");
+    const chosen = repeat;
+    setRepeat("");
     await apiJson("/api/transactions", "POST", {
       businessId,
       type,
@@ -136,8 +162,10 @@ export default function TransactionsTab({
       amount: amt,
       currency,
       notes,
+      ...(chosen ? { recurrence: { period: chosen, interval: 1 } } : {}),
     }).catch(() => {});
     mutate();
+    mutateRec();
     onChanged();
   }
 
@@ -155,10 +183,12 @@ export default function TransactionsTab({
     onChanged();
   }
 
-  const total = rows.reduce(
-    (s, r) => s + convert(r.amount, r.currency, display, r.fxRate || fxRate),
-    0,
-  );
+  // Mirrors the server: unticked occurrences are scheduled, not moved, so they
+  // stay out of the total.
+  const total = rows
+    .filter((r) => !r.pending)
+    .reduce((s, r) => s + convert(r.amount, r.currency, display, r.fxRate || fxRate), 0);
+  const pendingCount = rows.filter((r) => r.pending).length;
 
   return (
     <div className="p-4">
@@ -182,6 +212,20 @@ export default function TransactionsTab({
             <option>JMD</option>
           </select>
         </div>
+        <div className="w-32">
+          <label className="label">Repeat</label>
+          <select
+            className="input"
+            value={repeat}
+            onChange={(e) => setRepeat(e.target.value as typeof repeat)}
+            title="Repeat this entry from the date above"
+          >
+            <option value="">One-off</option>
+            {PERIODS.map((p) => (
+              <option key={p} value={p}>{PERIOD_LABEL[p]}</option>
+            ))}
+          </select>
+        </div>
         <div className="flex-1 min-w-48">
           <label className="label">Notes (@ to mention)</label>
           <MentionInput value={notes} onChange={setNotes} names={names} suggestions={notesPool} placeholder="" onEnter={add} />
@@ -191,8 +235,41 @@ export default function TransactionsTab({
         </button>
       </div>
 
+      {rules.length > 0 && (
+        <div className="card mb-4">
+          <div className="mb-2 text-sm font-semibold">
+            Repeating {type === "income" ? "income" : "expenses"}
+          </div>
+          <div className="space-y-1 text-sm">
+            {rules.map((r) => (
+              <div key={r._id} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{r.label}</span>
+                <span style={{ color: "var(--muted)" }}>
+                  {fmtMoney(r.amount, r.currency)} · {PERIOD_LABEL[r.period]}
+                  {r.interval > 1 ? ` ×${r.interval}` : ""} · from {r.startDate}
+                </span>
+                <button
+                  className="btn-ghost ml-auto text-xs"
+                  onClick={() => stopRule(r)}
+                  title="Stop creating new entries. Existing ones stay."
+                >
+                  Stop
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="mb-2 flex flex-wrap items-center gap-3">
-        <div className="text-sm font-semibold">Total: {fmtMoney(total, display)}</div>
+        <div className="text-sm font-semibold">
+          Total: {fmtMoney(total, display)}
+          {pendingCount > 0 && (
+            <span className="ml-2 font-normal" style={{ color: "var(--muted)" }}>
+              ({pendingCount} awaiting confirmation, not counted)
+            </span>
+          )}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <input
             className="input w-48 py-1"
@@ -221,6 +298,7 @@ export default function TransactionsTab({
         <table className="w-full text-sm">
           <thead>
             <tr style={{ color: "var(--muted)" }} className="text-left">
+              <th className="w-8 p-2" title="Tick a repeating entry once the money has actually moved"></th>
               <th className="p-2">Date</th>
               <th className="p-2">{labelWord}</th>
               <th className="p-2">Amount</th>
@@ -234,8 +312,40 @@ export default function TransactionsTab({
           </thead>
           <tbody>
             {filtered.map((r) => (
-              <tr key={r._id} style={{ borderTop: "1px solid var(--border)" }}>
-                <td className="p-2 w-28"><Cell value={r.date} type="date" onSave={(v) => edit(r._id, "date", v)} /></td>
+              <tr
+                key={r._id}
+                style={{
+                  borderTop: "1px solid var(--border)",
+                  // Dimmed so a projection never reads as a settled figure.
+                  opacity: r.pending ? 0.55 : 1,
+                }}
+              >
+                <td className="p-2 align-top">
+                  {r.recurrenceId ? (
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+                      checked={!r.pending}
+                      onChange={() => confirmOccurrence(r._id, !!r.pending ? false : true)}
+                      title={
+                        r.pending
+                          ? `Confirm this ${type === "income" ? "was received" : "was paid"} — it then counts toward totals`
+                          : "Confirmed. Untick to put it back to due."
+                      }
+                    />
+                  ) : null}
+                </td>
+                <td className="p-2 w-28">
+                  <Cell value={r.date} type="date" onSave={(v) => edit(r._id, "date", v)} />
+                  {r.pending && (
+                    <span
+                      className="mt-0.5 inline-block rounded px-1 text-[9px] font-bold uppercase"
+                      style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                    >
+                      due
+                    </span>
+                  )}
+                </td>
                 <td className="p-2"><Cell value={r.label} onSave={(v) => edit(r._id, "label", v)} /></td>
                 <td className="p-2 w-24"><Cell value={String(r.amount)} display={r.amount.toFixed(2)} type="number" onSave={(v) => edit(r._id, "amount", v)} /></td>
                 <td className="p-2 w-20"><Cell value={r.currency} type="select" options={["USD", "JMD"]} onSave={(v) => edit(r._id, "currency", v)} /></td>
@@ -256,7 +366,7 @@ export default function TransactionsTab({
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="p-4 text-center" style={{ color: "var(--muted)" }}>{query ? "No matches." : "No entries yet."}</td></tr>
+              <tr><td colSpan={10} className="p-4 text-center" style={{ color: "var(--muted)" }}>{query ? "No matches." : "No entries yet."}</td></tr>
             )}
           </tbody>
         </table>
